@@ -55,11 +55,11 @@ jobs:
         run: |
           sll ab \
             --url-a http://127.0.0.1:8080/fast \
-            --url-b http://127.0.0.1:8080/slow?delay=40 \
+            --url-b http://127.0.0.1:8080/json \
             --duration 5 \
             --concurrency 2 \
             --rps 5 \
-            --max-latency-diff 300 \
+            --max-latency-diff 50 \
             --i-own-this-target \
             --out reports/ab-test.json \
             --html reports/ab-test.html \
