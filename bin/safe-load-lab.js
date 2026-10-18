@@ -989,6 +989,49 @@ ${Object.entries(summary.assertionFailures).map(([key, count]) => `- **${key}**:
   fs.writeFileSync(filePath, md);
 }
 
+/**
+ * Save detailed failure logs for debugging
+ * @param {RequestResult[]} results - All test results
+ * @param {string} outputDir - Output directory for logs
+ */
+function saveFailureLogs(results, outputDir = 'reports/failures') {
+  const failures = results.filter(r => 
+    r.error || 
+    r.status >= 400 || 
+    r.status === 0 ||
+    (r.assertions && r.assertions.some(a => !a.passed))
+  );
+  
+  if (!failures.length) return;
+  
+  ensureDirFor(path.join(outputDir, 'dummy'));
+  
+  for (const [idx, failure] of failures.entries()) {
+    const timestamp = failure.timestamp.replace(/[:.]/g, '-');
+    const logFile = path.join(outputDir, `failure-${timestamp}-${idx + 1}.json`);
+    
+    const logData = {
+      timestamp: failure.timestamp,
+      endpoint: failure.endpoint,
+      method: failure.method,
+      url: failure.url,
+      status: failure.status,
+      durationMs: failure.durationMs,
+      error: failure.error,
+      headers: failure.headers,
+      body: failure.body ? failure.body.slice(0, 1000) : '', // Truncate long bodies
+      assertions: failure.assertions,
+      retriesExhausted: failure.retriesExhausted,
+      attemptsMade: failure.attemptsMade
+    };
+    
+    fs.writeFileSync(logFile, JSON.stringify(logData, null, 2));
+  }
+  
+  console.log(chalk.yellow(`\n⚠️  ${failures.length} failure(s) logged to ${outputDir}/`));
+  console.log(chalk.gray(`   Use these logs to debug failed requests and assertions`));
+}
+
 function printPlan(config) {
   console.log(`Safe Load Lab plan: ${config.name}${config.activeEnv ? ' [' + config.activeEnv + ']' : ''}`);
   console.log(`Duration: ${config.durationSeconds}s | Max concurrency: ${config.concurrency} | Max RPS: ${config.rps} | Timeout: ${config.timeoutMs}ms`);
@@ -1305,6 +1348,13 @@ async function saveReports(args, summary, results) {
     writeMarkdownReport(mdPath, summary); 
     console.log(chalk.green(`✓ Markdown report saved: ${mdPath}`)); 
   }
+  
+  // Save failure logs if there are failures
+  if (summary.totals.failed > 0 || (summary.assertionFailures && Object.keys(summary.assertionFailures).length > 0)) {
+    const failureDir = args.failureDir || 'reports/failures';
+    saveFailureLogs(results, failureDir);
+  }
+  
   if (args.webhook) await sendWebhook(args.webhook, summary);
   if (args.slack) await sendSlackNotification(args.slack, summary);
   if (args.compare) {
