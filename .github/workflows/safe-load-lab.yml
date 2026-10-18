@@ -31,14 +31,17 @@ jobs:
         run: npm install -g .
       - name: Create reports directory
         run: mkdir -p reports
-      - name: Run controlled test with assertions
+      - name: Run smoke test
         run: |
           sll run \
-            --config examples/with-assertions.json \
+            --url https://www.google.com \
+            --duration 10 \
+            --concurrency 2 \
+            --rps 3 \
             --i-own-this-target \
-            --out reports/test-report.json \
-            --html reports/test-report.html \
-            --markdown reports/test-report.md
+            --out reports/smoke-test.json \
+            --html reports/smoke-test.html \
+            --markdown reports/smoke-test.md
       - name: Upload reports
         uses: actions/upload-artifact@v4
         if: always()
