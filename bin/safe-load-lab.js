@@ -3,14 +3,169 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
+import chalk from 'chalk';
+import cliProgress from 'cli-progress';
 
-const VERSION = '2.0.1';
+const VERSION = '2.1.0';
 const HARD_LIMITS = {
   maxDurationSeconds: 600,
   maxConcurrency: 100,
   maxRps: 200,
   maxBodyBytes: 1024 * 1024
 };
+
+/**
+ * @typedef {Object} LoadTestConfig
+ * @property {string} name - Test name
+ * @property {string|null} activeEnv - Active environment name
+ * @property {Object.<string, any>} variables - Template variables
+ * @property {SetupStep[]} setup - Setup steps to run before test
+ * @property {Stage[]} stages - Test stages
+ * @property {number} durationSeconds - Total test duration
+ * @property {number} concurrency - Max concurrent requests
+ * @property {number} rps - Target requests per second
+ * @property {number} timeoutMs - Request timeout
+ * @property {Endpoint[]} endpoints - Test endpoints
+ * @property {Endpoint[]} endpointTemplates - Endpoint templates before variable substitution
+ * @property {Threshold} thresholds - Pass/fail criteria
+ * @property {RetryConfig} [retry] - Retry configuration
+ */
+
+/**
+ * @typedef {Object} Endpoint
+ * @property {string} name - Endpoint name
+ * @property {string} url - Target URL
+ * @property {string} method - HTTP method
+ * @property {Object.<string, string>} headers - Request headers
+ * @property {string|null} body - Request body
+ * @property {number} weight - Selection weight for load distribution
+ * @property {number|number[]} [expectStatus] - Expected status code(s)
+ * @property {Assertion[]} [assertions] - Response assertions
+ */
+
+/**
+ * @typedef {Object} SetupStep
+ * @property {string} name - Step name
+ * @property {string} url - Target URL
+ * @property {string} method - HTTP method
+ * @property {Object.<string, string>} headers - Request headers
+ * @property {string|null} body - Request body
+ * @property {number|number[]} expectStatus - Expected status code(s)
+ * @property {Object.<string, string>} extract - Variables to extract from response
+ */
+
+/**
+ * @typedef {Object} Stage
+ * @property {string} name - Stage name
+ * @property {number} durationSeconds - Stage duration
+ * @property {number} concurrency - Max concurrent requests
+ * @property {number} rps - Target requests per second
+ */
+
+/**
+ * @typedef {Object} Threshold
+ * @property {number} [maxErrorRate] - Maximum acceptable error rate (0-1)
+ * @property {number} [p95Ms] - Maximum acceptable p95 latency in ms
+ * @property {number} [p99Ms] - Maximum acceptable p99 latency in ms
+ */
+
+/**
+ * @typedef {Object} RetryConfig
+ * @property {boolean} enabled - Whether retries are enabled
+ * @property {number} maxAttempts - Maximum retry attempts
+ * @property {number} backoffMultiplier - Exponential backoff multiplier
+ * @property {number} maxBackoffMs - Maximum backoff duration
+ * @property {Array<number|string>} retryOn - Status codes or error types to retry
+ */
+
+/**
+ * @typedef {Object} Assertion
+ * @property {string} type - Assertion type (status|jsonPath|header|responseTime)
+ * @property {any} [value] - Expected value
+ * @property {any} [equals] - Exact match value
+ * @property {any} [contains] - Contains check value
+ * @property {number} [lessThan] - Less than value
+ * @property {string} [path] - JSON path for jsonPath assertions
+ * @property {string} [name] - Header name for header assertions
+ */
+
+/**
+ * @typedef {Object} RequestResult
+ * @property {string} endpoint - Endpoint name
+ * @property {string} method - HTTP method
+ * @property {string} url - Request URL
+ * @property {number} status - HTTP status code
+ * @property {number} durationMs - Request duration in milliseconds
+ * @property {string|null} error - Error message if failed
+ * @property {string} timestamp - ISO timestamp
+ * @property {string} body - Response body
+ * @property {Object.<string, string>} [headers] - Response headers
+ * @property {AssertionResult[]} [assertions] - Assertion results
+ * @property {boolean} [retriesExhausted] - Whether all retries were exhausted
+ * @property {number} [attemptsMade] - Number of attempts made
+ */
+
+/**
+ * @typedef {Object} AssertionResult
+ * @property {string} type - Assertion type
+ * @property {boolean} passed - Whether assertion passed
+ * @property {any} expected - Expected value
+ * @property {any} actual - Actual value
+ * @property {string} message - Result message
+ */
+
+/**
+ * Debug logging helper
+ * @param {...any} args - Arguments to log
+ */
+function debug(...args) {
+  if (process.env.DEBUG === 'true' || process.env.VERBOSE === 'true') {
+    console.log(chalk.gray('[DEBUG]'), ...args);
+  }
+}
+
+/**
+ * Validate URL format
+ * @param {string} url - URL to validate
+ * @returns {URL} Parsed URL object
+ * @throws {Error} If URL is invalid
+ */
+function validateUrl(url) {
+  try {
+    const parsed = new URL(url);
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      throw new Error('Protocol must be http or https');
+    }
+    return parsed;
+  } catch (err) {
+    throw new Error(`Invalid URL: ${url} - ${err.message}`);
+  }
+}
+
+/**
+ * Validate endpoint configuration
+ * @param {Object} ep - Endpoint to validate
+ * @param {number} idx - Endpoint index
+ * @throws {Error} If endpoint is invalid
+ */
+function validateEndpoint(ep, idx) {
+  if (!ep.url) throw new Error(`Endpoint #${idx + 1}: missing url`);
+  
+  try {
+    validateUrl(ep.url);
+  } catch (err) {
+    throw new Error(`Endpoint #${idx + 1}: ${err.message}`);
+  }
+  
+  const validMethods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'];
+  if (ep.method && !validMethods.includes(ep.method)) {
+    throw new Error(`Endpoint #${idx + 1}: invalid method ${ep.method}. Must be one of: ${validMethods.join(', ')}`);
+  }
+  
+  if (ep.weight !== undefined && (ep.weight < 0 || ep.weight > 100)) {
+    throw new Error(`Endpoint #${idx + 1}: weight must be 0-100, got ${ep.weight}`);
+  }
+}
 
 function printHelp() {
   console.log(`
@@ -57,6 +212,7 @@ Common options:
   --compare <file>          Compare with previous report
   --realistic               Use realistic traffic patterns (random spacing)
   --verbose                 Enable verbose logging
+  --debug                   Enable debug mode with detailed request/response logs
 
 Examples:
   sll sample --out load-test.json
@@ -151,6 +307,8 @@ function mergeDeep(base, override) {
 
 function normalizeEndpoint(ep, idx, vars) {
   ep = renderTemplate(ep, vars);
+  validateEndpoint(ep, idx);  // Add validation
+  
   if (ep.graphql) {
     ep.method ||= 'POST';
     ep.headers = { 'Content-Type': 'application/json', ...(ep.headers || {}) };
@@ -163,7 +321,7 @@ function normalizeEndpoint(ep, idx, vars) {
   let body = ep.body;
   if (body && typeof body !== 'string') body = JSON.stringify(body);
   if (body && Buffer.byteLength(body) > HARD_LIMITS.maxBodyBytes) throw new Error(`Endpoint #${idx + 1} body exceeds ${HARD_LIMITS.maxBodyBytes} bytes`);
-  return { name: ep.name || `${method} ${u.pathname}`, url: ep.url, method, headers: ep.headers || {}, body, weight: Number(ep.weight || 1), expectStatus: ep.expectStatus };
+  return { name: ep.name || `${method} ${u.pathname}`, url: ep.url, method, headers: ep.headers || {}, body, weight: Number(ep.weight || 1), expectStatus: ep.expectStatus, assertions: ep.assertions || [] };
 }
 
 function normalizeStage(stage, idx) {
@@ -309,6 +467,20 @@ function summarize(results, startedAt, finishedAt, config) {
       p99Ms: epPercentiles[99]
     };
   }
+  
+  // Count assertion failures
+  const assertionFailures = {};
+  for (const result of results) {
+    if (!result.assertions) continue;
+    
+    for (const assertion of result.assertions) {
+      if (!assertion.passed) {
+        const key = `${result.endpoint}.${assertion.type}`;
+        assertionFailures[key] = (assertionFailures[key] || 0) + 1;
+      }
+    }
+  }
+  
   const elapsedSeconds = (finishedAt - startedAt) / 1000;
   const avg = durations.length ? durations.reduce((a, b) => a + b, 0) / durations.length : 0;
   const metrics = { errorRate: total ? failed / total : 0, p95: globalPercentiles[95], p99: globalPercentiles[99], avg };
@@ -322,7 +494,8 @@ function summarize(results, startedAt, finishedAt, config) {
     latencyMs: { avg, min: durations.length ? Math.min(...durations) : 0, max: durations.length ? Math.max(...durations) : 0, p50: globalPercentiles[50], p90: globalPercentiles[90], p95: metrics.p95, p99: metrics.p99 },
     byStatus,
     byEndpoint: endpointSummary,
-    thresholds: evaluateThresholds(config.thresholds || {}, metrics)
+    thresholds: evaluateThresholds(config.thresholds || {}, metrics),
+    assertionFailures: Object.keys(assertionFailures).length > 0 ? assertionFailures : undefined
   };
 }
 
@@ -331,6 +504,10 @@ async function doRequest(ep, timeoutMs, captureBody = false) {
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   const start = performance.now();
   try {
+    debug(`Request: ${ep.method} ${ep.url}`);
+    if (ep.headers && Object.keys(ep.headers).length) debug(`Headers:`, ep.headers);
+    if (ep.body) debug(`Body:`, typeof ep.body === 'string' ? ep.body.slice(0, 100) : ep.body);
+    
     const res = await fetch(ep.url, { 
       method: ep.method, 
       headers: ep.headers, 
@@ -339,14 +516,221 @@ async function doRequest(ep, timeoutMs, captureBody = false) {
       signal: controller.signal,
       keepalive: true  // Enable connection reuse
     });
+    
+    // Capture response headers
+    const headers = {};
+    res.headers.forEach((value, key) => {
+      headers[key] = value;
+    });
+    
     // Only consume body when needed - for non-success responses, skip body reading if not capturing
     const text = captureBody ? await res.text().catch(() => '') : 
                  (res.status >= 200 && res.status < 300) ? await res.arrayBuffer().then(() => '').catch(() => '') :
                  '';
-    return { endpoint: ep.name, method: ep.method, url: ep.url, status: res.status, durationMs: performance.now() - start, error: null, timestamp: new Date().toISOString(), body: text };
+    
+    const durationMs = performance.now() - start;
+    debug(`Response: ${res.status} in ${durationMs.toFixed(2)}ms`);
+    
+    const result = { 
+      endpoint: ep.name, 
+      method: ep.method, 
+      url: ep.url, 
+      status: res.status, 
+      durationMs, 
+      error: null, 
+      timestamp: new Date().toISOString(), 
+      body: text,
+      headers
+    };
+    
+    // Evaluate assertions if present
+    if (ep.assertions && ep.assertions.length > 0) {
+      result.assertions = evaluateAssertions(result, ep.assertions);
+    }
+    
+    return result;
   } catch (err) {
-    return { endpoint: ep.name, method: ep.method, url: ep.url, status: 0, durationMs: performance.now() - start, error: err?.name === 'AbortError' ? 'timeout' : String(err?.message || err), timestamp: new Date().toISOString(), body: '' };
+    const durationMs = performance.now() - start;
+    debug(`Request failed: ${err?.message}`);
+    
+    return { 
+      endpoint: ep.name, 
+      method: ep.method, 
+      url: ep.url, 
+      status: 0, 
+      durationMs, 
+      error: err?.name === 'AbortError' ? 'timeout' : String(err?.message || err), 
+      timestamp: new Date().toISOString(), 
+      body: '',
+      headers: {}
+    };
   } finally { clearTimeout(timeout); }
+}
+
+/**
+ * Execute request with exponential backoff retry
+ * @param {Endpoint} ep - Endpoint configuration
+ * @param {number} timeoutMs - Request timeout
+ * @param {RetryConfig} retryConfig - Retry configuration
+ * @param {boolean} captureBody - Whether to capture response body
+ * @returns {Promise<RequestResult>}
+ */
+async function doRequestWithRetry(ep, timeoutMs, retryConfig = {}, captureBody = false) {
+  const {
+    enabled = true,
+    maxAttempts = 3,
+    backoffMultiplier = 2,
+    maxBackoffMs = 10000,
+    retryOn = [500, 502, 503, 504, 'ECONNRESET', 'ETIMEDOUT', 'timeout']
+  } = retryConfig;
+  
+  if (!enabled || maxAttempts <= 1) {
+    return doRequest(ep, timeoutMs, captureBody);
+  }
+  
+  let lastResult;
+  
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    lastResult = await doRequest(ep, timeoutMs, captureBody);
+    
+    // Success or non-retryable error
+    const shouldRetry = lastResult.error 
+      ? retryOn.includes(lastResult.error) || retryOn.some(code => lastResult.error.includes(String(code)))
+      : retryOn.includes(lastResult.status);
+    
+    if (!shouldRetry) {
+      if (attempt > 1) {
+        debug(`Request succeeded on attempt ${attempt}`);
+      }
+      return lastResult;
+    }
+    
+    const errorMsg = lastResult.error || `HTTP ${lastResult.status}`;
+    
+    // Don't backoff after last attempt
+    if (attempt < maxAttempts) {
+      const backoffMs = Math.min(
+        1000 * Math.pow(backoffMultiplier, attempt - 1),
+        maxBackoffMs
+      );
+      
+      debug(`Retry ${attempt}/${maxAttempts} for ${ep.name} after ${backoffMs}ms (${errorMsg})`);
+      
+      await new Promise(resolve => setTimeout(resolve, backoffMs));
+    }
+  }
+  
+  // All retries exhausted
+  debug(`All ${maxAttempts} retries exhausted for ${ep.name}`);
+  
+  return {
+    ...lastResult,
+    retriesExhausted: true,
+    attemptsMade: maxAttempts
+  };
+}
+
+/**
+ * Evaluate assertions against response
+ * @param {RequestResult} result - Request result
+ * @param {Assertion[]} assertions - Assertions to evaluate
+ * @returns {AssertionResult[]}
+ */
+function evaluateAssertions(result, assertions = []) {
+  if (!assertions.length) return [];
+  
+  const results = [];
+  let responseBody;
+  
+  try {
+    responseBody = result.body ? JSON.parse(result.body) : null;
+  } catch {
+    responseBody = null;
+  }
+  
+  for (const assertion of assertions) {
+    const assertionResult = {
+      type: assertion.type,
+      passed: false,
+      expected: null,
+      actual: null,
+      message: ''
+    };
+    
+    try {
+      switch (assertion.type) {
+        case 'status':
+          assertionResult.expected = assertion.value;
+          assertionResult.actual = result.status;
+          assertionResult.passed = result.status === assertion.value;
+          assertionResult.message = assertionResult.passed 
+            ? 'Status matches' 
+            : `Expected ${assertion.value}, got ${result.status}`;
+          break;
+          
+        case 'jsonPath':
+          const value = getByPath(responseBody, assertion.path);
+          assertionResult.actual = value;
+          
+          if (assertion.equals !== undefined) {
+            assertionResult.expected = assertion.equals;
+            assertionResult.passed = value === assertion.equals;
+            assertionResult.message = assertionResult.passed
+              ? 'Value matches'
+              : `Expected ${assertion.equals}, got ${value}`;
+          } else if (assertion.contains !== undefined) {
+            assertionResult.expected = `contains "${assertion.contains}"`;
+            assertionResult.passed = String(value).includes(assertion.contains);
+            assertionResult.message = assertionResult.passed
+              ? 'Contains expected value'
+              : `Expected to contain "${assertion.contains}", got ${value}`;
+          }
+          break;
+          
+        case 'header':
+          const headerValue = result.headers?.[assertion.name.toLowerCase()];
+          assertionResult.actual = headerValue;
+          
+          if (assertion.equals !== undefined) {
+            assertionResult.expected = assertion.equals;
+            assertionResult.passed = headerValue === assertion.equals;
+            assertionResult.message = assertionResult.passed
+              ? 'Header matches'
+              : `Expected ${assertion.equals}, got ${headerValue}`;
+          } else if (assertion.contains !== undefined) {
+            assertionResult.expected = `contains "${assertion.contains}"`;
+            assertionResult.passed = headerValue?.includes(assertion.contains);
+            assertionResult.message = assertionResult.passed
+              ? 'Header contains expected value'
+              : `Expected to contain "${assertion.contains}", got ${headerValue}`;
+          }
+          break;
+          
+        case 'responseTime':
+          assertionResult.actual = result.durationMs;
+          
+          if (assertion.lessThan !== undefined) {
+            assertionResult.expected = `< ${assertion.lessThan}ms`;
+            assertionResult.passed = result.durationMs < assertion.lessThan;
+            assertionResult.message = assertionResult.passed
+              ? 'Response time acceptable'
+              : `Expected < ${assertion.lessThan}ms, got ${result.durationMs.toFixed(2)}ms`;
+          }
+          break;
+          
+        default:
+          assertionResult.message = `Unknown assertion type: ${assertion.type}`;
+      }
+        
+    } catch (err) {
+      assertionResult.passed = false;
+      assertionResult.message = `Error evaluating assertion: ${err.message}`;
+    }
+    
+    results.push(assertionResult);
+  }
+  
+  return results;
 }
 
 async function runSetup(config) {
@@ -383,11 +767,28 @@ async function runTest(config) {
   await runSetup(config);
   const startedAt = Date.now();
   const stopAt = startedAt + config.durationSeconds * 1000;
-  console.log(`\nStarting: ${config.name}${config.activeEnv ? ' [' + config.activeEnv + ']' : ''}`);
-  console.log(`Duration: ${config.durationSeconds}s | Max concurrency: ${config.concurrency} | Max RPS cap: ${config.rps}`);
-  if (config.stages.length > 1) console.log('Stages:', config.stages.map(s => `${s.name}:${s.durationSeconds}s/${s.concurrency}c/${s.rps}rps`).join(' -> '));
-  console.log('Press Ctrl+C to stop early.\n');
-  process.on('SIGINT', () => { stopped = true; console.log('\nStopping gracefully...'); });
+  
+  console.log(chalk.bold.cyan(`\n🚀 Starting: ${config.name}${config.activeEnv ? chalk.gray(' [' + config.activeEnv + ']') : ''}`));
+  console.log(`Duration: ${chalk.yellow(config.durationSeconds + 's')} | Max concurrency: ${chalk.yellow(config.concurrency)} | Max RPS cap: ${chalk.yellow(config.rps)}`);
+  if (config.stages.length > 1) console.log('Stages:', config.stages.map(s => `${chalk.cyan(s.name)}:${s.durationSeconds}s/${s.concurrency}c/${s.rps}rps`).join(' → '));
+  console.log(chalk.gray('Press Ctrl+C to stop early.\n'));
+  
+  // Create progress bar
+  const progressBar = new cliProgress.SingleBar({
+    format: `${chalk.cyan('{bar}')} | {percentage}% | ETA: {eta}s | Stage: {stage} | Requests: {requests} | RPS: {rps} | Failed: {failed}`,
+    barCompleteChar: '\u2588',
+    barIncompleteChar: '\u2591',
+    hideCursor: true
+  }, cliProgress.Presets.shades_classic);
+  
+  progressBar.start(config.durationSeconds, 0, {
+    stage: 'starting',
+    requests: 0,
+    rps: '0.0',
+    failed: 0
+  });
+  
+  process.on('SIGINT', () => { stopped = true; progressBar.stop(); console.log(chalk.yellow('\n⚠️  Stopping gracefully...')); });
   let lastProgress = Date.now();
   let lastLaunch = Date.now();
   let requestCounter = 0;
@@ -406,18 +807,30 @@ async function runTest(config) {
       const ep = pickEndpoint(config.endpoints);
       active++; launched++; requestCounter++;
       lastLaunch = now;
-      doRequest(ep, config.timeoutMs).then(r => results.push(r)).finally(() => active--);
+      
+      // Use retry logic if configured
+      const retryConfig = config.retry || { enabled: true, maxAttempts: 3 };
+      doRequestWithRetry(ep, config.timeoutMs, retryConfig, false)
+        .then(r => results.push(r))
+        .finally(() => active--);
       
       // Prevent memory overflow - stream results for very long tests
-      if (results.length > 50000) {
-        console.warn('\n⚠️  Large result set detected. Consider shorter test duration or streaming mode.');
+      if (results.length > 50000 && results.length % 10000 === 0) {
+        console.log(chalk.yellow(`\n⚠️  Large result set: ${results.length} results. Consider shorter duration.`));
       }
     }
     
-    if (now - lastProgress >= 2000) {
+    if (now - lastProgress >= 500) {
       const failed = results.filter(r => r.error || r.status >= 400 || r.status === 0).length;
       const actualRps = results.length / elapsedSeconds;
-      process.stdout.write(`\rStage: ${stage.name} | launched: ${launched} | completed: ${results.length} | active: ${active} | failed: ${failed} | RPS: ${actualRps.toFixed(1)}`);
+      
+      progressBar.update(elapsedSeconds, {
+        stage: stage.name,
+        requests: results.length,
+        rps: actualRps.toFixed(1),
+        failed
+      });
+      
       lastProgress = now;
     }
     
@@ -426,9 +839,12 @@ async function runTest(config) {
     await new Promise(resolve => setTimeout(resolve, Math.min(timeUntilNext, 10)));
   }
   
+  progressBar.stop();
+  
+  // Wait for in-flight requests
   while (active > 0) await new Promise(resolve => setTimeout(resolve, 50));
   const finishedAt = Date.now();
-  console.log('\n\nTest finished.');
+  console.log(chalk.bold.green('\n✓ Test finished.'));
   return { summary: summarize(results, startedAt, finishedAt, config), results };
 }
 
@@ -519,20 +935,45 @@ function validateConfigCommand(args) {
 }
 
 function printSummary(summary) {
-  console.log('\nSummary');
-  console.log('-------');
-  console.log(`Requests:     ${summary.totals.requests}`);
-  console.log(`Failed:       ${summary.totals.failed}`);
-  console.log(`Error rate:   ${(summary.totals.errorRate * 100).toFixed(2)}%`);
-  console.log(`Achieved RPS: ${summary.totals.achievedRps.toFixed(2)}`);
-  console.log(`Avg latency:  ${summary.latencyMs.avg.toFixed(2)}ms`);
-  console.log(`p95 latency:  ${summary.latencyMs.p95.toFixed(2)}ms`);
-  console.log(`p99 latency:  ${summary.latencyMs.p99.toFixed(2)}ms`);
-  console.log('Status:', summary.byStatus);
+  console.log(chalk.bold('\n📊 Summary'));
+  console.log(chalk.gray('─'.repeat(60)));
+  
+  const errorRate = summary.totals.errorRate;
+  const errorColor = errorRate > 0.05 ? chalk.red : errorRate > 0.01 ? chalk.yellow : chalk.green;
+  
+  console.log(`Requests:     ${chalk.bold.white(summary.totals.requests)}`);
+  console.log(`Failed:       ${errorColor.bold(summary.totals.failed)}`);
+  console.log(`Error rate:   ${errorColor.bold((errorRate * 100).toFixed(2) + '%')}`);
+  console.log(`Achieved RPS: ${chalk.cyan.bold(summary.totals.achievedRps.toFixed(2))}`);
+  console.log(`Avg latency:  ${chalk.magenta(summary.latencyMs.avg.toFixed(2) + 'ms')}`);
+  console.log(`p95 latency:  ${chalk.magenta(summary.latencyMs.p95.toFixed(2) + 'ms')}`);
+  console.log(`p99 latency:  ${chalk.magenta(summary.latencyMs.p99.toFixed(2) + 'ms')}`);
+  
+  console.log(chalk.gray('\nStatus Distribution:'));
+  for (const [status, count] of Object.entries(summary.byStatus)) {
+    const statusNum = parseInt(status);
+    const statusColor = isNaN(statusNum) ? chalk.red : 
+                       statusNum >= 200 && statusNum < 300 ? chalk.green :
+                       statusNum >= 400 ? chalk.red : chalk.yellow;
+    console.log(`  ${statusColor(status)}: ${count}`);
+  }
+  
   const thresholdEntries = Object.entries(summary.thresholds || {});
   if (thresholdEntries.length) {
-    console.log('\nThresholds');
-    for (const [name, check] of thresholdEntries) console.log(`- ${name}: ${check.pass ? 'PASS' : 'FAIL'} actual=${check.actual} expected=${check.expected}`);
+    console.log(chalk.bold('\n🎯 Thresholds'));
+    for (const [name, check] of thresholdEntries) {
+      const icon = check.pass ? chalk.green('✓') : chalk.red('✗');
+      const color = check.pass ? chalk.green : chalk.red;
+      console.log(`  ${icon} ${name}: ${color(check.pass ? 'PASS' : 'FAIL')} (actual: ${check.actual}, expected: ${check.expected})`);
+    }
+  }
+  
+  // Show assertion failures if any
+  if (summary.assertionFailures && Object.keys(summary.assertionFailures).length > 0) {
+    console.log(chalk.bold.yellow('\n⚠️  Assertion Failures'));
+    for (const [key, count] of Object.entries(summary.assertionFailures)) {
+      console.log(chalk.yellow(`  ${key}: ${count} failures`));
+    }
   }
 }
 
@@ -725,6 +1166,13 @@ async function runStressTest(args) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  
+  // Enable debug mode
+  if (args.debug || args.verbose) {
+    process.env.DEBUG = 'true';
+    process.env.VERBOSE = 'true';
+  }
+  
   const command = args._[0] || 'help';
   if (command === 'help' || args.help) { printHelp(); return; }
   if (command === 'version' || args.version) { console.log(VERSION); return; }
