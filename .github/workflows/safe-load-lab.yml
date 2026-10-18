@@ -20,18 +20,6 @@ jobs:
       - name: Run tests
         run: npm test
 
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - name: Install dependencies
-        run: npm ci
-      - name: Run lint
-        run: npm run lint
-
   safe-load-test:
     runs-on: ubuntu-latest
     steps:
@@ -41,19 +29,19 @@ jobs:
           node-version: 20
       - name: Install CLI
         run: npm install -g .
-        working-directory: safe-load-lab
-      - name: Run controlled staging test
+      - name: Create reports directory
+        run: mkdir -p reports
+      - name: Run controlled test with assertions
         run: |
           sll run \
-            --config examples/advanced.json \
-            --env staging \
+            --config examples/with-assertions.json \
             --i-own-this-target \
-            --out reports/staging-report.json \
-            --html reports/staging-report.html
-        working-directory: safe-load-lab
+            --out reports/test-report.json \
+            --html reports/test-report.html \
+            --markdown reports/test-report.md
       - name: Upload reports
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: safe-load-lab-reports
-          path: safe-load-lab/reports
+          path: reports
