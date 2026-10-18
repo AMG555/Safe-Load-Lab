@@ -1,0 +1,58 @@
+{
+  "name": "api-test-with-assertions",
+  "durationSeconds": 30,
+  "concurrency": 5,
+  "rps": 10,
+  "timeoutMs": 5000,
+  "retry": {
+    "enabled": true,
+    "maxAttempts": 3,
+    "backoffMultiplier": 2,
+    "maxBackoffMs": 10000,
+    "retryOn": [500, 502, 503, 504, "timeout", "ECONNRESET"]
+  },
+  "thresholds": {
+    "maxErrorRate": 0.05,
+    "p95Ms": 1000,
+    "p99Ms": 2000
+  },
+  "endpoints": [
+    {
+      "name": "health-check",
+      "method": "GET",
+      "url": "https://httpbin.org/status/200",
+      "weight": 3,
+      "assertions": [
+        {
+          "type": "status",
+          "value": 200
+        },
+        {
+          "type": "responseTime",
+          "lessThan": 2000
+        }
+      ]
+    },
+    {
+      "name": "get-json",
+      "method": "GET",
+      "url": "https://httpbin.org/json",
+      "weight": 2,
+      "assertions": [
+        {
+          "type": "status",
+          "value": 200
+        },
+        {
+          "type": "header",
+          "name": "content-type",
+          "contains": "application/json"
+        },
+        {
+          "type": "responseTime",
+          "lessThan": 3000
+        }
+      ]
+    }
+  ]
+}
