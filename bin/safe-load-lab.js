@@ -1548,9 +1548,16 @@ function computeAbDiff(summaryA, summaryB, options = {}) {
   const errorRegressed = errorRateDiff > maxErrorDiffPct;
   const isRegression = latencyRegressed || errorRegressed;
 
+  const avgDelta = latencies.avg.pct;
+  const p95Delta = latencies.p95.pct;
+  const p50Delta = latencies.p50.pct;
+
   let winner = 'similar';
-  if (latencies.p95.pct <= -5 && errorRateDiff <= 0) winner = 'B';
-  else if (latencies.p95.pct >= 5 || errorRateDiff > 0) winner = 'A';
+  if ((p95Delta <= -5 || (avgDelta <= -10 && p50Delta <= -5)) && errorRateDiff <= 0) {
+    winner = 'B';
+  } else if (p95Delta >= 5 || (avgDelta >= 10 && p50Delta >= 5) || errorRateDiff > 0) {
+    winner = 'A';
+  }
 
   return {
     variantA: summaryA.testName || 'Variant A',

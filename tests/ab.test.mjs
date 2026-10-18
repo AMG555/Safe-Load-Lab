@@ -97,7 +97,7 @@ test('runAbTest - end-to-end A/B differential load test with mock server', async
 
     const result = await runAbTest({
       'url-a': `http://127.0.0.1:${mockPort}/fast`,
-      'url-b': `http://127.0.0.1:${mockPort}/slow?delay=40`,
+      'url-b': `http://127.0.0.1:${mockPort}/slow?delay=100`,
       duration: 2,
       concurrency: 2,
       rps: 5,
