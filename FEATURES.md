@@ -76,7 +76,62 @@ sll stress --url http://localhost:3000/api/health --i-own-this-target
 - Resource saturation (CPU, memory, connections)
 - Auto-scaling triggers
 
+### A/B Differential Testing (`sll ab` / `sll diff`)
+
+**Purpose:** Compare two versions, endpoints, or environments under identical load and catch performance regressions before production.
+
+```bash
+# Compare endpoint A vs endpoint B
+sll ab \
+  --url-a http://localhost:8080/fast \
+  --url-b http://localhost:8080/slow?delay=50 \
+  --duration 10 \
+  --concurrency 5 \
+  --rps 10 \
+  --max-latency-diff 15 \
+  --i-own-this-target \
+  --html reports/ab-report.html \
+  --markdown reports/ab-report.md
+```
+
+**What it Evaluates:**
+- Requests delta and achieved throughput
+- Error rate differences
+- Latency percentiles: avg, p50, p90, p95, and p99
+- Winner determination (`🏆 Variant B is WINNER` or `⚠️ Variant A was Faster`)
+- Exits with code 2 on performance regression to automatically fail CI/CD pull requests
+
+### Hermetic Local Mock Server (`sll mock`)
+
+**Purpose:** Zero-dependency local mock server for immediate testing without external services.
+
+```bash
+sll mock --port 8080
+```
+
+**Built-in Routes:**
+- `GET /health`: Health status, version, uptime, timestamp
+- `GET /fast`: Ultra-fast 200 OK
+- `GET /slow?delay=ms`: Configurable artificial latency
+- `GET /error?status=code`: Configurable HTTP error code simulation
+- `GET /rate-limit?limit=X&window=Y`: Realistic sliding window rate limiting
+- `POST /echo`: Echoes headers, method, and request body
+- `GET /json`: Structured mock user fixture
+
+### cURL Command Import (`sll import-curl` & `--curl`)
+
+**Purpose:** Directly run tests from cURL commands copied from DevTools, Postman, or documentation.
+
+```bash
+# Direct run from cURL
+sll run --curl "curl -X POST http://localhost:8080/echo -H 'Content-Type: application/json' -d '{\"msg\":\"hello\"}'" --duration 10 --i-own-this-target
+
+# Convert cURL to config JSON
+sll import-curl "curl https://myapi.com/items" --out load-test.json
+```
+
 ## Integration Features
+
 
 ### Webhook Integration
 

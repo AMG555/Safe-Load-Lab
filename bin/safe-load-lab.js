@@ -2,11 +2,13 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import http from 'node:http';
+import { fileURLToPath } from 'node:url';
 import { performance } from 'node:perf_hooks';
 import chalk from 'chalk';
 import cliProgress from 'cli-progress';
 
-const VERSION = '2.1.0';
+const VERSION = '2.2.0';
 const HARD_LIMITS = {
   maxDurationSeconds: 600,
   maxConcurrency: 100,
@@ -175,9 +177,14 @@ Controlled load testing for systems you own or have permission to test.
 Usage:
   safe-load-lab run --config <file> --i-own-this-target
   sll run --url <url> --duration 60 --concurrency 10 --rps 20 --i-own-this-target
+  sll ab --url-a <urlA> --url-b <urlB> --i-own-this-target
+  sll mock --port 8080
 
 Commands:
   run         Run a controlled load test
+  ab, diff    Run A/B differential load test comparing two endpoints or configs
+  mock        Start hermetic local mock server for zero-flake load testing
+  import-curl Convert cURL command string to Safe Load Lab test config
   validate    Validate and normalize a config without sending traffic
   plan        Show resolved test plan without sending traffic
   sample      Create a sample config file
@@ -189,12 +196,13 @@ Commands:
   version     Show version
   help        Show help
 
-Required safety flag for run/rate-limit:
+Required safety flag for run/ab/rate-limit/spike/soak/stress:
   --i-own-this-target       Confirms you own or have explicit permission to test the target
 
 Common options:
   --config <file>           JSON config file
   --url <url>               Target URL for simple one-endpoint test
+  --curl "<command>"        Directly run load test from a cURL command string
   --method <GET|POST|...>   HTTP method, default GET
   --body <json/string>      Request body for simple test
   --header "K: V"           Header, repeatable
@@ -216,13 +224,28 @@ Common options:
   --verbose                 Enable verbose logging
   --debug                   Enable debug mode with detailed request/response logs
 
+A/B Differential testing options:
+  --url-a <url>             URL for Variant A
+  --url-b <url>             URL for Variant B
+  --config-a <file>         Config JSON for Variant A
+  --config-b <file>         Config JSON for Variant B
+  --env-a <name>            Environment profile for Variant A
+  --env-b <name>            Environment profile for Variant B
+  --max-latency-diff <pct>  Maximum allowed latency % degradation before regression (default 15)
+  --max-error-diff <pct>    Maximum allowed error rate diff before regression (default 0)
+
+Mock server options:
+  --port <number>           Mock server listening port, default 8080
+  --host <string>           Mock server host, default 127.0.0.1
+
 Examples:
+  sll mock --port 8080
+  sll ab --url-a http://localhost:8080/fast --url-b http://localhost:8080/slow --duration 10 --i-own-this-target
+  sll run --curl "curl -X POST http://localhost:8080/echo -d '{\\"foo\\":\\"bar\\"}'" --duration 10 --i-own-this-target
+  sll run --url http://localhost:8080/fast --duration 30 --concurrency 5 --rps 10 --i-own-this-target
   sll sample --out load-test.json
   sll validate --config load-test.json --env staging
   sll plan --config load-test.json --env staging
-  sll run --config load-test.json --env staging --i-own-this-target
-  sll run --url http://localhost:3000/api/health --duration 30 --concurrency 5 --rps 10 --i-own-this-target
-  sll rate-limit --url http://localhost:3000/api/login --method POST --rps 10 --duration 20 --i-own-this-target
 
 Notes:
   - This is not a DDoS tool.
@@ -354,11 +377,204 @@ function applyCliOverrides(config, args) {
   return config;
 }
 
+function parseCurlCommand(curlStr) {
+  if (!curlStr || typeof curlStr !== 'string') throw new Error('Invalid curl command');
+  
+  const clean = curlStr.trim().replace(/^curl\s+/i, '');
+  
+  // Extract URL (quoted or unquoted)
+  const urlMatch = clean.match(/(?:^|\s)(?:'([^']+)'|"([^"]+)"|(https?:\/\/[^\s]+))/);
+  const rawUrl = urlMatch ? (urlMatch[1] || urlMatch[2] || urlMatch[3]) : null;
+  if (!rawUrl || !rawUrl.startsWith('http')) {
+    const fallbackMatch = clean.match(/https?:\/\/[^\s"']+/);
+    if (!fallbackMatch) throw new Error('No HTTP/HTTPS URL found in curl command');
+  }
+  const url = rawUrl && rawUrl.startsWith('http') ? rawUrl : clean.match(/https?:\/\/[^\s"']+/)[0];
+
+  // Extract Method
+  let method = 'GET';
+  const methodMatch = clean.match(/(?:-X|--request)\s+([A-Za-z]+)/i);
+  if (methodMatch) {
+    method = methodMatch[1].toUpperCase();
+  }
+
+  // Extract Headers
+  const headers = {};
+  const headerRegex = /(?:-H|--header)\s+(?:'([^']+)'|"([^"]+)")/g;
+  let hMatch;
+  while ((hMatch = headerRegex.exec(clean)) !== null) {
+    const raw = hMatch[1] || hMatch[2];
+    const colonIdx = raw.indexOf(':');
+    if (colonIdx !== -1) {
+      const k = raw.slice(0, colonIdx).trim();
+      const v = raw.slice(colonIdx + 1).trim();
+      headers[k] = v;
+    }
+  }
+
+  // Extract Body
+  let body = null;
+  const dataMatch = clean.match(/(?:-d|--data|--data-raw|--data-binary)\s+(?:'([^']*)'|"([^"]*)")/s) ||
+                    clean.match(/(?:-d|--data|--data-raw|--data-binary)\s+([^\s]+)/);
+  if (dataMatch) {
+    body = dataMatch[1] !== undefined ? dataMatch[1] : (dataMatch[2] !== undefined ? dataMatch[2] : dataMatch[3]);
+    if (!methodMatch) method = 'POST';
+    const hasContentType = Object.keys(headers).some(k => k.toLowerCase() === 'content-type');
+    if (!hasContentType && body) {
+      try {
+        JSON.parse(body);
+        headers['Content-Type'] = 'application/json';
+      } catch {
+        // Not JSON
+      }
+    }
+  }
+
+  const pathname = new URL(url).pathname;
+  return {
+    name: `curl-${method.toLowerCase()}${pathname === '/' ? '' : pathname.replace(/\//g, '-')}`,
+    url,
+    method,
+    headers,
+    body,
+    weight: 1
+  };
+}
+
+function startMockServer(port = 8080, host = '127.0.0.1') {
+  const requestHistory = new Map(); // ip -> [timestamps]
+
+  const server = http.createServer((req, res) => {
+    const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    const pathname = parsedUrl.pathname;
+    const clientIp = req.socket.remoteAddress || '127.0.0.1';
+
+    // CORS & Common Headers
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
+    if (pathname === '/' || pathname === '/health') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'ok', version: VERSION, uptime: process.uptime(), time: new Date().toISOString() }));
+      return;
+    }
+
+    if (pathname === '/fast') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'ok', route: 'fast', timestamp: Date.now() }));
+      return;
+    }
+
+    if (pathname === '/slow') {
+      const delayMs = parseInt(parsedUrl.searchParams.get('delay') || '100', 10);
+      setTimeout(() => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', route: 'slow', delayedMs: delayMs, timestamp: Date.now() }));
+      }, delayMs);
+      return;
+    }
+
+    if (pathname === '/error') {
+      const code = parseInt(parsedUrl.searchParams.get('status') || '500', 10);
+      res.writeHead(code, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: `Simulated error ${code}`, status: code }));
+      return;
+    }
+
+    if (pathname === '/rate-limit') {
+      const limit = parseInt(parsedUrl.searchParams.get('limit') || '10', 10);
+      const windowSec = parseInt(parsedUrl.searchParams.get('window') || '5', 10);
+      const now = Date.now();
+      const windowMs = windowSec * 1000;
+
+      let history = requestHistory.get(clientIp) || [];
+      history = history.filter(ts => now - ts < windowMs);
+      history.push(now);
+      requestHistory.set(clientIp, history);
+
+      if (history.length > limit) {
+        res.writeHead(429, {
+          'Content-Type': 'application/json',
+          'Retry-After': String(windowSec)
+        });
+        res.end(JSON.stringify({ error: 'Too Many Requests', retryAfter: windowSec, limit }));
+        return;
+      }
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'ok', requestsInWindow: history.length, limit }));
+      return;
+    }
+
+    if (pathname === '/echo') {
+      let body = '';
+      req.on('data', chunk => { body += chunk; });
+      req.on('end', () => {
+        let parsed = null;
+        try { parsed = JSON.parse(body); } catch { parsed = body; }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          method: req.method,
+          url: req.url,
+          headers: req.headers,
+          body: parsed
+        }));
+      });
+      return;
+    }
+
+    if (pathname === '/json') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        users: [
+          { id: 1, name: 'Ada Lovelace', role: 'admin' },
+          { id: 2, name: 'Alan Turing', role: 'member' }
+        ],
+        meta: { total: 2, version: '1.0' }
+      }));
+      return;
+    }
+
+    // Default 404
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Not Found', path: pathname }));
+  });
+
+  server.listen(port, host);
+  return server;
+}
+
 function normalizeConfig(args) {
   let config = {};
-  if (args.config) config = JSON.parse(fs.readFileSync(args.config, 'utf8'));
-  else {
-    if (!args.url) throw new Error('Provide --config <file> or --url <url>');
+  if (args.curl) {
+    const ep = parseCurlCommand(args.curl);
+    config = {
+      name: ep.name || 'curl-imported-test',
+      durationSeconds: args.duration,
+      concurrency: args.concurrency,
+      rps: args.rps,
+      timeoutMs: args.timeout,
+      endpoints: [ep]
+    };
+  } else if (args.config) config = JSON.parse(fs.readFileSync(args.config, 'utf8'));
+  else if (args.endpoints && Array.isArray(args.endpoints)) {
+    config = {
+      name: args.name || 'custom-test',
+      durationSeconds: args.duration,
+      concurrency: args.concurrency,
+      rps: args.rps,
+      timeoutMs: args.timeout,
+      endpoints: args.endpoints
+    };
+  } else {
+    if (!args.url) throw new Error('Provide --config <file>, --url <url>, or --curl "<command>"');
     config = {
       name: 'simple-test',
       durationSeconds: args.duration,
@@ -775,22 +991,26 @@ async function runTest(config) {
   if (config.stages.length > 1) console.log('Stages:', config.stages.map(s => `${chalk.cyan(s.name)}:${s.durationSeconds}s/${s.concurrency}c/${s.rps}rps`).join(' → '));
   console.log(chalk.gray('Press Ctrl+C to stop early.\n'));
   
-  // Create progress bar
-  const progressBar = new cliProgress.SingleBar({
-    format: `${chalk.cyan('{bar}')} | {percentage}% | ETA: {eta}s | Stage: {stage} | Requests: {requests} | RPS: {rps} | Failed: {failed}`,
-    barCompleteChar: '\u2588',
-    barIncompleteChar: '\u2591',
-    hideCursor: true
-  }, cliProgress.Presets.shades_classic);
+  // Create progress bar if in TTY environment
+  const isTTY = Boolean(process.stdout.isTTY);
+  let progressBar = null;
+  if (isTTY) {
+    progressBar = new cliProgress.SingleBar({
+      format: `${chalk.cyan('{bar}')} | {percentage}% | ETA: {eta}s | Stage: {stage} | Requests: {requests} | RPS: {rps} | Failed: {failed}`,
+      barCompleteChar: '\u2588',
+      barIncompleteChar: '\u2591',
+      hideCursor: true
+    }, cliProgress.Presets.shades_classic);
+    
+    progressBar.start(config.durationSeconds, 0, {
+      stage: 'starting',
+      requests: 0,
+      rps: '0.0',
+      failed: 0
+    });
+  }
   
-  progressBar.start(config.durationSeconds, 0, {
-    stage: 'starting',
-    requests: 0,
-    rps: '0.0',
-    failed: 0
-  });
-  
-  process.on('SIGINT', () => { stopped = true; progressBar.stop(); console.log(chalk.yellow('\n⚠️  Stopping gracefully...')); });
+  process.on('SIGINT', () => { stopped = true; if (progressBar) progressBar.stop(); console.log(chalk.yellow('\n⚠️  Stopping gracefully...')); });
   let lastProgress = Date.now();
   let lastLaunch = Date.now();
   let requestCounter = 0;
@@ -824,14 +1044,18 @@ async function runTest(config) {
     
     if (now - lastProgress >= 500) {
       const failed = results.filter(r => r.error || r.status >= 400 || r.status === 0).length;
-      const actualRps = results.length / elapsedSeconds;
+      const actualRps = elapsedSeconds > 0 ? results.length / elapsedSeconds : 0;
       
-      progressBar.update(elapsedSeconds, {
-        stage: stage.name,
-        requests: results.length,
-        rps: actualRps.toFixed(1),
-        failed
-      });
+      if (progressBar) {
+        progressBar.update(elapsedSeconds, {
+          stage: stage.name,
+          requests: results.length,
+          rps: actualRps.toFixed(1),
+          failed
+        });
+      } else if (now - lastProgress >= 2000) {
+        console.log(`[${Math.round(elapsedSeconds)}s/${config.durationSeconds}s] Requests: ${results.length} | RPS: ${actualRps.toFixed(1)} | Failed: ${failed}`);
+      }
       
       lastProgress = now;
     }
@@ -841,7 +1065,7 @@ async function runTest(config) {
     await new Promise(resolve => setTimeout(resolve, Math.min(timeUntilNext, 10)));
   }
   
-  progressBar.stop();
+  if (progressBar) progressBar.stop();
   
   // Wait for in-flight requests
   while (active > 0) await new Promise(resolve => setTimeout(resolve, 50));
@@ -913,14 +1137,12 @@ function writeJunitReport(filePath, summary) {
 }
 
 /**
- * Write markdown format report
- * @param {string} filePath - Output file path
+ * Generate markdown format report content
  * @param {Object} summary - Test summary
+ * @returns {string} Markdown report content
  */
-function writeMarkdownReport(filePath, summary) {
-  ensureDirFor(filePath);
-  
-  const md = `# Load Test Report
+function generateMarkdownReport(summary) {
+  return `# Load Test Report
 
 **Test**: ${summary.testName}  
 **Started**: ${summary.startedAt}  
@@ -985,7 +1207,16 @@ ${Object.entries(summary.assertionFailures).map(([key, count]) => `- **${key}**:
 
 *Generated by Safe Load Lab v${VERSION}*
 `;
-  
+}
+
+/**
+ * Write markdown format report
+ * @param {string} filePath - Output file path
+ * @param {Object} summary - Test summary
+ */
+function writeMarkdownReport(filePath, summary) {
+  ensureDirFor(filePath);
+  const md = generateMarkdownReport(summary);
   fs.writeFileSync(filePath, md);
 }
 
@@ -1286,6 +1517,298 @@ async function runStressTest(args) {
   return { summary, results };
 }
 
+// A/B Differential Load Testing
+function computeAbDiff(summaryA, summaryB, options = {}) {
+  const diffLatency = (valA, valB) => {
+    const a = Number(valA || 0);
+    const b = Number(valB || 0);
+    const diff = b - a;
+    const pct = a > 0 ? (diff / a) * 100 : 0;
+    return { a, b, diff, pct };
+  };
+
+  const reqDelta = summaryB.totals.requests - summaryA.totals.requests;
+  const rpsDelta = summaryB.totals.achievedRps - summaryA.totals.achievedRps;
+  const errorRateA = summaryA.totals.errorRate * 100;
+  const errorRateB = summaryB.totals.errorRate * 100;
+  const errorRateDiff = errorRateB - errorRateA;
+
+  const latencies = {
+    avg: diffLatency(summaryA.latencyMs?.avg, summaryB.latencyMs?.avg),
+    p50: diffLatency(summaryA.latencyMs?.p50, summaryB.latencyMs?.p50),
+    p90: diffLatency(summaryA.latencyMs?.p90, summaryB.latencyMs?.p90),
+    p95: diffLatency(summaryA.latencyMs?.p95, summaryB.latencyMs?.p95),
+    p99: diffLatency(summaryA.latencyMs?.p99, summaryB.latencyMs?.p99),
+  };
+
+  const maxLatencyDiffPct = Number(options.maxLatencyDiff ?? 15);
+  const maxErrorDiffPct = Number(options.maxErrorDiff ?? 0);
+
+  const latencyRegressed = latencies.p95.pct > maxLatencyDiffPct || latencies.avg.pct > maxLatencyDiffPct;
+  const errorRegressed = errorRateDiff > maxErrorDiffPct;
+  const isRegression = latencyRegressed || errorRegressed;
+
+  let winner = 'similar';
+  if (latencies.p95.pct <= -5 && errorRateDiff <= 0) winner = 'B';
+  else if (latencies.p95.pct >= 5 || errorRateDiff > 0) winner = 'A';
+
+  return {
+    variantA: summaryA.testName || 'Variant A',
+    variantB: summaryB.testName || 'Variant B',
+    requests: { a: summaryA.totals.requests, b: summaryB.totals.requests, diff: reqDelta },
+    rps: { a: summaryA.totals.achievedRps, b: summaryB.totals.achievedRps, diff: rpsDelta },
+    errorRate: { a: errorRateA, b: errorRateB, diff: errorRateDiff },
+    latencies,
+    winner,
+    isRegression,
+    regressionReason: latencyRegressed 
+      ? `Latency degraded in Variant B (avg: ${latencies.avg.pct.toFixed(1)}%, p95: ${latencies.p95.pct.toFixed(1)}% vs limit ${maxLatencyDiffPct}%)`
+      : errorRegressed 
+      ? `Error rate increased by ${errorRateDiff.toFixed(2)}% (limit ${maxErrorDiffPct}%)` 
+      : null
+  };
+}
+
+function printAbSummary(diff) {
+  console.log(chalk.bold('\n============================================================'));
+  console.log(chalk.bold('             📊 A/B DIFFERENTIAL COMPARISON RESULT          '));
+  console.log(chalk.bold('============================================================'));
+  
+  const pad = (s, n) => String(s).padEnd(n);
+  const padNum = (n, unit = '') => (typeof n === 'number' ? n.toFixed(2) : String(n)) + unit;
+
+  console.log(`${chalk.bold(pad('Metric', 18))} ${chalk.cyan(pad('Variant A', 16))} ${chalk.cyan(pad('Variant B', 16))} ${chalk.bold('Delta / Winner')}`);
+  console.log(chalk.gray('─'.repeat(65)));
+
+  const printRow = (label, valA, valB, delta, pct, isLowerBetter = true, unit = '') => {
+    const diffSign = delta > 0 ? `+${padNum(delta, unit)}` : `${padNum(delta, unit)}`;
+    const pctSign = pct > 0 ? `+${pct.toFixed(1)}%` : `${pct.toFixed(1)}%`;
+    let color = chalk.gray;
+    let winnerIndicator = '(=)';
+
+    if (Math.abs(pct) >= 2) {
+      const bIsBetter = isLowerBetter ? delta < 0 : delta > 0;
+      if (bIsBetter) {
+        color = chalk.green;
+        winnerIndicator = '🏆 (B is better)';
+      } else {
+        color = chalk.red;
+        winnerIndicator = '⚠️ (A was better)';
+      }
+    }
+
+    console.log(
+      `${pad(label, 18)} ` +
+      `${pad(padNum(valA, unit), 16)} ` +
+      `${pad(padNum(valB, unit), 16)} ` +
+      `${color(`${diffSign} (${pctSign}) ${winnerIndicator}`)}`
+    );
+  };
+
+  printRow('Requests', diff.requests.a, diff.requests.b, diff.requests.diff, diff.requests.a ? (diff.requests.diff / diff.requests.a) * 100 : 0, false);
+  printRow('Achieved RPS', diff.rps.a, diff.rps.b, diff.rps.diff, diff.rps.a ? (diff.rps.diff / diff.rps.a) * 100 : 0, false);
+  printRow('Error Rate', diff.errorRate.a, diff.errorRate.b, diff.errorRate.diff, diff.errorRate.diff, true, '%');
+  printRow('Avg Latency', diff.latencies.avg.a, diff.latencies.avg.b, diff.latencies.avg.diff, diff.latencies.avg.pct, true, 'ms');
+  printRow('p50 Latency', diff.latencies.p50.a, diff.latencies.p50.b, diff.latencies.p50.diff, diff.latencies.p50.pct, true, 'ms');
+  printRow('p90 Latency', diff.latencies.p90.a, diff.latencies.p90.b, diff.latencies.p90.diff, diff.latencies.p90.pct, true, 'ms');
+  printRow('p95 Latency', diff.latencies.p95.a, diff.latencies.p95.b, diff.latencies.p95.diff, diff.latencies.p95.pct, true, 'ms');
+  printRow('p99 Latency', diff.latencies.p99.a, diff.latencies.p99.b, diff.latencies.p99.diff, diff.latencies.p99.pct, true, 'ms');
+  
+  console.log(chalk.gray('─'.repeat(65)));
+  if (diff.winner === 'B') {
+    console.log(chalk.bold.green(`🏆 OVERALL WINNER: Variant B (faster with equal or better reliability)`));
+  } else if (diff.winner === 'A') {
+    console.log(chalk.bold.yellow(`🏆 OVERALL WINNER: Variant A (Variant B performed worse)`));
+  } else {
+    console.log(chalk.bold.cyan(`⚖️  OVERALL VERDICT: Performance is comparable within normal margins.`));
+  }
+}
+
+function writeAbHtmlReport(filePath, diff, summaryA, summaryB) {
+  ensureDirFor(filePath);
+  const padNum = (n, u = '') => (typeof n === 'number' ? n.toFixed(2) : String(n)) + u;
+  const pctSign = pct => (pct > 0 ? `+${pct.toFixed(1)}%` : `${pct.toFixed(1)}%`);
+
+  const metrics = [
+    { label: 'Achieved RPS', a: summaryA.totals.achievedRps, b: summaryB.totals.achievedRps, diff: diff.rps.diff, pct: summaryA.totals.achievedRps ? (diff.rps.diff / summaryA.totals.achievedRps) * 100 : 0, lower: false },
+    { label: 'Error Rate', a: diff.errorRate.a, b: diff.errorRate.b, diff: diff.errorRate.diff, pct: diff.errorRate.diff, lower: true, unit: '%' },
+    { label: 'Avg Latency', a: diff.latencies.avg.a, b: diff.latencies.avg.b, diff: diff.latencies.avg.diff, pct: diff.latencies.avg.pct, lower: true, unit: 'ms' },
+    { label: 'p50 Latency', a: diff.latencies.p50.a, b: diff.latencies.p50.b, diff: diff.latencies.p50.diff, pct: diff.latencies.p50.pct, lower: true, unit: 'ms' },
+    { label: 'p90 Latency', a: diff.latencies.p90.a, b: diff.latencies.p90.b, diff: diff.latencies.p90.diff, pct: diff.latencies.p90.pct, lower: true, unit: 'ms' },
+    { label: 'p95 Latency', a: diff.latencies.p95.a, b: diff.latencies.p95.b, diff: diff.latencies.p95.diff, pct: diff.latencies.p95.pct, lower: true, unit: 'ms' },
+    { label: 'p99 Latency', a: diff.latencies.p99.a, b: diff.latencies.p99.b, diff: diff.latencies.p99.diff, pct: diff.latencies.p99.pct, lower: true, unit: 'ms' },
+  ];
+
+  const rows = metrics.map(m => {
+    const isBetter = m.lower ? m.diff < 0 : m.diff > 0;
+    const isNeutral = Math.abs(m.pct) < 1;
+    const cls = isNeutral ? 'neutral' : isBetter ? 'pass' : 'fail';
+    const sign = m.diff > 0 ? '+' : '';
+    return `<tr>
+      <td>${htmlEscape(m.label)}</td>
+      <td>${padNum(m.a, m.unit)}</td>
+      <td>${padNum(m.b, m.unit)}</td>
+      <td class="${cls}">${sign}${padNum(m.diff, m.unit)} (${pctSign(m.pct)})</td>
+    </tr>`;
+  }).join('');
+
+  const verdictBadge = diff.winner === 'B' 
+    ? '<span class="badge pass">🏆 Variant B is Faster</span>' 
+    : diff.winner === 'A' 
+    ? '<span class="badge fail">⚠️ Variant A was Faster</span>' 
+    : '<span class="badge neutral">⚖️ Comparable Performance</span>';
+
+  const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Safe Load Lab - A/B Test Report</title><style>
+    body{font-family:Inter,system-ui,Segoe UI,Arial,sans-serif;margin:0;background:#0f172a;color:#e5e7eb}main{max-width:1100px;margin:0 auto;padding:32px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;margin:20px 0}.card{background:#111827;border:1px solid #334155;border-radius:14px;padding:20px;box-shadow:0 8px 24px #0004}.metric{font-size:26px;font-weight:800;color:#93c5fd}.label{color:#94a3b8;font-size:13px;margin-top:4px}table{width:100%;border-collapse:collapse;margin:20px 0;background:#111827;border-radius:12px;overflow:hidden}th,td{padding:12px 16px;border-bottom:1px solid #334155;text-align:left}th{background:#1e293b;color:#bfdbfe}.pass{color:#86efac;font-weight:700}.fail{color:#fca5a5;font-weight:700}.neutral{color:#94a3b8}.badge{display:inline-block;padding:6px 14px;border-radius:999px;font-size:15px;font-weight:700;margin-top:10px}h1,h2{color:white}.muted{color:#94a3b8}</style></head><body><main>
+    <h1>⚖️ Safe Load Lab - A/B Differential Report</h1>
+    <p class="muted">Variant A: <b>${htmlEscape(diff.variantA)}</b> vs Variant B: <b>${htmlEscape(diff.variantB)}</b></p>
+    <div>${verdictBadge}</div>
+    <section class="grid">
+      <div class="card"><div class="metric">${summaryA.totals.requests} vs ${summaryB.totals.requests}</div><div class="label">Total Requests (A vs B)</div></div>
+      <div class="card"><div class="metric">${summaryA.totals.achievedRps.toFixed(1)} → ${summaryB.totals.achievedRps.toFixed(1)}</div><div class="label">Achieved RPS</div></div>
+      <div class="card"><div class="metric">${summaryA.latencyMs.p95.toFixed(1)}ms → ${summaryB.latencyMs.p95.toFixed(1)}ms</div><div class="label">p95 Latency</div></div>
+      <div class="card"><div class="metric">${(summaryA.totals.errorRate*100).toFixed(1)}% vs ${(summaryB.totals.errorRate*100).toFixed(1)}%</div><div class="label">Error Rate</div></div>
+    </section>
+    <h2>Differential Metrics</h2>
+    <table><thead><tr><th>Metric</th><th>Variant A</th><th>Variant B</th><th>Delta</th></tr></thead><tbody>${rows}</tbody></table>
+    </main></body></html>`;
+  fs.writeFileSync(filePath, html);
+}
+
+function generateAbMarkdownReport(diff, summaryA, summaryB) {
+  const padNum = (n, u = '') => (typeof n === 'number' ? n.toFixed(2) : String(n)) + u;
+  const pctSign = pct => (pct > 0 ? `+${pct.toFixed(1)}%` : `${pct.toFixed(1)}%`);
+
+  const verdict = diff.winner === 'B' 
+    ? '🏆 **Variant B is the WINNER** (faster with equal or better reliability)' 
+    : diff.winner === 'A' 
+    ? '⚠️ **Variant A was FASTER** (Variant B showed performance regression)' 
+    : '⚖️ **Comparable Performance** (no significant performance delta)';
+
+  return `# ⚖️ A/B Differential Load Test Report
+
+**Variant A**: ${summaryA.testName}  
+**Variant B**: ${summaryB.testName}  
+**Date**: ${new Date().toISOString()}  
+
+### Overall Verdict
+${verdict}
+
+${diff.isRegression ? `> ❌ **Regression Warning**: ${diff.regressionReason}\n` : ''}
+
+## Metric Comparison
+
+| Metric | Variant A | Variant B | Difference | % Delta |
+|--------|-----------|-----------|------------|---------|
+| Total Requests | ${summaryA.totals.requests} | ${summaryB.totals.requests} | ${diff.requests.diff > 0 ? '+' : ''}${diff.requests.diff} | ${pctSign(summaryA.totals.requests ? (diff.requests.diff / summaryA.totals.requests) * 100 : 0)} |
+| Achieved RPS | ${summaryA.totals.achievedRps.toFixed(2)} | ${summaryB.totals.achievedRps.toFixed(2)} | ${diff.rps.diff > 0 ? '+' : ''}${diff.rps.diff.toFixed(2)} | ${pctSign(summaryA.totals.achievedRps ? (diff.rps.diff / summaryA.totals.achievedRps) * 100 : 0)} |
+| Error Rate | ${(summaryA.totals.errorRate * 100).toFixed(2)}% | ${(summaryB.totals.errorRate * 100).toFixed(2)}% | ${diff.errorRate.diff > 0 ? '+' : ''}${diff.errorRate.diff.toFixed(2)}% | — |
+| Avg Latency | ${summaryA.latencyMs.avg.toFixed(2)}ms | ${summaryB.latencyMs.avg.toFixed(2)}ms | ${diff.latencies.avg.diff > 0 ? '+' : ''}${diff.latencies.avg.diff.toFixed(2)}ms | ${pctSign(diff.latencies.avg.pct)} |
+| Median (p50) | ${summaryA.latencyMs.p50.toFixed(2)}ms | ${summaryB.latencyMs.p50.toFixed(2)}ms | ${diff.latencies.p50.diff > 0 ? '+' : ''}${diff.latencies.p50.diff.toFixed(2)}ms | ${pctSign(diff.latencies.p50.pct)} |
+| p90 Latency | ${summaryA.latencyMs.p90.toFixed(2)}ms | ${summaryB.latencyMs.p90.toFixed(2)}ms | ${diff.latencies.p90.diff > 0 ? '+' : ''}${diff.latencies.p90.diff.toFixed(2)}ms | ${pctSign(diff.latencies.p90.pct)} |
+| p95 Latency | ${summaryA.latencyMs.p95.toFixed(2)}ms | ${summaryB.latencyMs.p95.toFixed(2)}ms | ${diff.latencies.p95.diff > 0 ? '+' : ''}${diff.latencies.p95.diff.toFixed(2)}ms | ${pctSign(diff.latencies.p95.pct)} |
+| p99 Latency | ${summaryA.latencyMs.p99.toFixed(2)}ms | ${summaryB.latencyMs.p99.toFixed(2)}ms | ${diff.latencies.p99.diff > 0 ? '+' : ''}${diff.latencies.p99.diff.toFixed(2)}ms | ${pctSign(diff.latencies.p99.pct)} |
+
+---
+*Generated by Safe Load Lab v${VERSION}*
+`;
+}
+
+function writeAbMarkdownReport(filePath, diff, summaryA, summaryB) {
+  ensureDirFor(filePath);
+  const md = generateAbMarkdownReport(diff, summaryA, summaryB);
+  fs.writeFileSync(filePath, md);
+}
+
+async function runAbTest(args) {
+  let configA, configB;
+
+  if (args['config-a'] && args['config-b']) {
+    configA = JSON.parse(fs.readFileSync(args['config-a'], 'utf8'));
+    configB = JSON.parse(fs.readFileSync(args['config-b'], 'utf8'));
+  } else if (args.config && (args['env-a'] || args['env-b'])) {
+    const base = JSON.parse(fs.readFileSync(args.config, 'utf8'));
+    if (!args['env-a'] || !args['env-b']) throw new Error('A/B test with --config requires both --env-a and --env-b');
+    configA = mergeDeep(base, base.environments?.[args['env-a']] || {});
+    configA.name = `${base.name || 'test'} [${args['env-a']}]`;
+    configB = mergeDeep(base, base.environments?.[args['env-b']] || {});
+    configB.name = `${base.name || 'test'} [${args['env-b']}]`;
+  } else if (args['url-a'] && args['url-b']) {
+    configA = {
+      name: 'Variant-A',
+      endpoints: [{ name: 'Endpoint-A', url: args['url-a'], method: args.method || 'GET', headers: parseHeaders(args.header), body: args.body, weight: 1 }]
+    };
+    configB = {
+      name: 'Variant-B',
+      endpoints: [{ name: 'Endpoint-B', url: args['url-b'], method: args.method || 'GET', headers: parseHeaders(args.header), body: args.body, weight: 1 }]
+    };
+  } else {
+    throw new Error('A/B test requires --url-a and --url-b, OR --config-a and --config-b, OR --config with --env-a and --env-b');
+  }
+
+  configA = applyCliOverrides(configA, args);
+  configB = applyCliOverrides(configB, args);
+  
+  const normA = normalizeConfig({ ...args, config: null, url: null, curl: null, ...configA });
+  normA.name = configA.name || 'Variant-A';
+  
+  const normB = normalizeConfig({ ...args, config: null, url: null, curl: null, ...configB });
+  normB.name = configB.name || 'Variant-B';
+
+  console.log(chalk.bold.magenta('\n============================================================'));
+  console.log(chalk.bold.magenta('           ⚖️  SAFE LOAD LAB — A/B DIFFERENTIAL TEST         '));
+  console.log(chalk.bold.magenta('============================================================\n'));
+  console.log(`Variant A: ${chalk.cyan(normA.name)} (${normA.endpoints.map(e => e.url).join(', ')})`);
+  console.log(`Variant B: ${chalk.cyan(normB.name)} (${normB.endpoints.map(e => e.url).join(', ')})`);
+  console.log(`Duration:  ${normA.durationSeconds}s each | Concurrency: ${normA.concurrency} | Target RPS: ${normA.rps}\n`);
+
+  console.log(chalk.bold.blue('─── Phase 1/2: Testing Variant A ───────────────────────────'));
+  const runA = await runTest(normA);
+  printSummary(runA.summary);
+
+  console.log(chalk.bold.blue('\n─── Phase 2/2: Testing Variant B ───────────────────────────'));
+  const runB = await runTest(normB);
+  printSummary(runB.summary);
+
+  const diff = computeAbDiff(runA.summary, runB.summary, {
+    maxLatencyDiff: args['max-latency-diff'],
+    maxErrorDiff: args['max-error-diff']
+  });
+
+  printAbSummary(diff);
+
+  const defaultOut = `reports/ab-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+  const out = args.out || defaultOut;
+  ensureDirFor(out);
+  fs.writeFileSync(out, JSON.stringify({ diff, variantA: runA, variantB: runB }, null, 2));
+  console.log(chalk.green(`\n✓ A/B JSON report saved: ${out}`));
+
+  if (args.html) {
+    writeAbHtmlReport(args.html, diff, runA.summary, runB.summary);
+    console.log(chalk.green(`✓ A/B HTML report saved: ${args.html}`));
+  }
+  if (args.markdown || args.md) {
+    const mdPath = args.markdown || args.md;
+    writeAbMarkdownReport(mdPath, diff, runA.summary, runB.summary);
+    console.log(chalk.green(`✓ A/B Markdown report saved: ${mdPath}`));
+  }
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    try {
+      const summaryMd = generateAbMarkdownReport(diff, runA.summary, runB.summary);
+      fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, '\n' + summaryMd + '\n');
+    } catch (_) {}
+  }
+
+  if (diff.isRegression) {
+    console.log(chalk.bold.red(`\n❌ PERFORMANCE REGRESSION DETECTED: ${diff.regressionReason}`));
+    process.exitCode = 2;
+  } else {
+    console.log(chalk.bold.green(`\n✅ A/B Test Passed: No performance regressions detected.`));
+  }
+
+  return { diff, runA, runB };
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   
@@ -1302,11 +1825,56 @@ async function main() {
   if (command === 'validate') { validateConfigCommand(args); return; }
   if (command === 'plan') { printPlan(normalizeConfig(args)); return; }
   if (command === 'compare') {
-    if (!args._ [1] || !args._[2]) throw new Error('compare requires two report files: compare <file1> <file2>');
+    if (!args._[1] || !args._[2]) throw new Error('compare requires two report files: compare <file1> <file2>');
     compareReports(args._[1], args._[2]);
     return;
   }
+  if (command === 'mock') {
+    const port = Number(args.port || 8080);
+    const host = args.host || '127.0.0.1';
+    const server = startMockServer(port, host);
+    console.log(chalk.bold.green(`✓ Safe Load Lab Mock Server running on http://${host}:${port}`));
+    console.log(chalk.gray('  Hermetic test routes ready for zero-flake load testing:'));
+    console.log(`  - ${chalk.cyan('GET')}  http://${host}:${port}/health`);
+    console.log(`  - ${chalk.cyan('GET')}  http://${host}:${port}/fast`);
+    console.log(`  - ${chalk.cyan('GET')}  http://${host}:${port}/slow?delay=100`);
+    console.log(`  - ${chalk.cyan('GET')}  http://${host}:${port}/error?status=500`);
+    console.log(`  - ${chalk.cyan('GET')}  http://${host}:${port}/rate-limit?limit=10&window=5`);
+    console.log(`  - ${chalk.cyan('GET')}  http://${host}:${port}/json`);
+    console.log(`  - ${chalk.cyan('POST')} http://${host}:${port}/echo`);
+    console.log(chalk.gray('\nPress Ctrl+C to stop.\n'));
+    process.on('SIGINT', () => {
+      console.log(chalk.yellow('\nStopping mock server...'));
+      server.close(() => process.exit(0));
+    });
+    return;
+  }
+  if (command === 'import-curl') {
+    const curlStr = args._.slice(1).join(' ') || args.curl;
+    if (!curlStr) throw new Error('import-curl requires a curl command string');
+    const ep = parseCurlCommand(curlStr);
+    const configOut = {
+      name: ep.name,
+      durationSeconds: Number(args.duration || 30),
+      concurrency: Number(args.concurrency || 5),
+      rps: Number(args.rps || 10),
+      timeoutMs: Number(args.timeout || 10000),
+      endpoints: [ep]
+    };
+    if (args.out) {
+      ensureDirFor(args.out);
+      fs.writeFileSync(args.out, JSON.stringify(configOut, null, 2));
+      console.log(chalk.green(`✓ Saved generated config to ${args.out}`));
+    } else {
+      console.log(JSON.stringify(configOut, null, 2));
+    }
+    return;
+  }
   if (!args['i-own-this-target']) throw new Error('Missing required safety flag: --i-own-this-target');
+  if (command === 'ab' || command === 'diff') {
+    await runAbTest(args);
+    return;
+  }
   if (command === 'rate-limit') { await runRateLimitCheck(args); return; }
   if (command === 'spike') {
     const { summary, results } = await runSpikeTest(args);
@@ -1348,6 +1916,12 @@ async function saveReports(args, summary, results) {
     writeMarkdownReport(mdPath, summary); 
     console.log(chalk.green(`✓ Markdown report saved: ${mdPath}`)); 
   }
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    try {
+      const summaryMd = generateMarkdownReport(summary);
+      fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, '\n' + summaryMd + '\n');
+    } catch (_) {}
+  }
   
   // Save failure logs if there are failures
   if (summary.totals.failed > 0 || (summary.assertionFailures && Object.keys(summary.assertionFailures).length > 0)) {
@@ -1363,4 +1937,42 @@ async function saveReports(args, summary, results) {
   }
 }
 
-main().catch(err => { console.error(`Error: ${err.message}`); process.exit(1); });
+const isMain = Boolean(process.argv[1] && (
+  path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url)) ||
+  process.argv[1].endsWith('sll') ||
+  process.argv[1].endsWith('sll.js') ||
+  process.argv[1].endsWith('safe-load-lab') ||
+  process.argv[1].endsWith('safe-load-lab.js')
+));
+
+if (isMain) {
+  main().catch(err => { console.error(`Error: ${err.message}`); process.exit(1); });
+}
+
+export {
+  VERSION,
+  HARD_LIMITS,
+  startMockServer,
+  parseCurlCommand,
+  computeAbDiff,
+  printAbSummary,
+  writeAbHtmlReport,
+  generateMarkdownReport,
+  writeMarkdownReport,
+  generateAbMarkdownReport,
+  writeAbMarkdownReport,
+  runAbTest,
+  normalizeConfig,
+  runTest,
+  calculatePercentiles,
+  percentile,
+  getByPath,
+  setByPath,
+  renderTemplate,
+  pickEndpoint,
+  evaluateAssertions,
+  evaluateThresholds,
+  parseHeaders,
+  parseArgs
+};
+

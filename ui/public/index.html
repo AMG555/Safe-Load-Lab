@@ -614,6 +614,19 @@
         <p class="subtitle">Controlled performance testing for applications you own</p>
       </header>
 
+      <!-- Hermetic Mock Server Controller Bar -->
+      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:14px;padding:14px 20px;margin-bottom:24px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;">
+        <div style="display:flex;align-items:center;gap:12px;">
+          <span id="mockStatusDot" style="width:12px;height:12px;border-radius:50%;background:#ef4444;display:inline-block;box-shadow:0 0 8px #ef4444;"></span>
+          <span style="font-size:15px;font-weight:700;">Local Hermetic Mock Server</span>
+          <span id="mockStatusBadge" style="background:rgba(239,68,68,0.2);color:#ef4444;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600;">Stopped</span>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <button type="button" class="btn-secondary" style="padding:8px 16px;font-size:13px;" onclick="toggleMockServer()">Toggle Mock Server (Port 8080)</button>
+          <button type="button" class="btn-secondary" style="padding:8px 16px;font-size:13px;" onclick="fillMockEndpoints()">Use Mock Endpoints</button>
+        </div>
+      </div>
+
       <div class="main-grid">
       <!-- Config Builder -->
       <div class="card">
@@ -621,12 +634,21 @@
         
         <div class="tabs">
           <button class="tab-btn active" onclick="switchTab('quick')">Quick</button>
+          <button class="tab-btn" onclick="switchTab('ab')">A/B Testing</button>
           <button class="tab-btn" onclick="switchTab('advanced')">Advanced</button>
         </div>
 
         <!-- Quick Config -->
         <div id="quick" class="tab-content active">
           <div id="alerts-quick"></div>
+
+          <div class="form-group">
+            <label>Import from cURL (optional)</label>
+            <div style="display:flex;gap:8px;">
+              <input type="text" id="quickCurl" placeholder="curl -X POST http://localhost:8080/echo -d '{&quot;hello&quot;:&quot;world&quot;}'">
+              <button type="button" class="btn-secondary" style="white-space:nowrap;padding:8px 14px;font-size:12px;" onclick="importCurl()">Parse</button>
+            </div>
+          </div>
 
           <div class="form-group">
             <label>Target URL *</label>
@@ -652,6 +674,47 @@
           <div class="button-group">
             <button class="btn-secondary" onclick="validateConfig('quick')">Validate</button>
             <button class="btn-primary" onclick="runTest('quick')">Run Test</button>
+          </div>
+        </div>
+
+        <!-- A/B Testing Config -->
+        <div id="ab" class="tab-content">
+          <div id="alerts-ab"></div>
+
+          <div class="form-group">
+            <label>Variant A URL (Baseline) *</label>
+            <input type="url" id="abUrlA" placeholder="http://localhost:8080/fast" value="http://localhost:8080/fast">
+          </div>
+
+          <div class="form-group">
+            <label>Variant B URL (Candidate / Canary) *</label>
+            <input type="url" id="abUrlB" placeholder="http://localhost:8080/slow?delay=40" value="http://localhost:8080/slow?delay=40">
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label>Duration (s) *</label>
+              <input type="number" id="abDuration" value="5" min="1" max="600">
+            </div>
+            <div class="form-group">
+              <label>Concurrency *</label>
+              <input type="number" id="abConcurrency" value="2" min="1" max="100">
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label>Target RPS *</label>
+              <input type="number" id="abRps" value="5" min="1" max="200">
+            </div>
+            <div class="form-group">
+              <label>Max Latency Diff (%) *</label>
+              <input type="number" id="abMaxLatencyDiff" value="20" min="1" max="500">
+            </div>
+          </div>
+
+          <div class="button-group">
+            <button class="btn-primary" onclick="runAbTest()">Run A/B Benchmark</button>
           </div>
         </div>
 
@@ -1140,8 +1203,168 @@ npm install -g .
         });
     }
 
-    // Load history on page load
+    // cURL command parser for web UI
+    function importCurl() {
+      const curl = document.getElementById('quickCurl').value.trim();
+      if (!curl) return;
+      const urlMatch = curl.match(/https?:\/\/[^\s"']+/);
+      if (urlMatch) {
+        document.getElementById('quickUrl').value = urlMatch[0];
+      }
+      document.getElementById('alerts-quick').innerHTML = '<div class="alert alert-success">✓ cURL target imported into configuration</div>';
+    }
+
+    // Mock Server Client Management
+    let mockRunning = false;
+    function checkMockStatus() {
+      fetch('/api/mock/status')
+        .then(r => r.json())
+        .then(data => {
+          mockRunning = data.running;
+          const dot = document.getElementById('mockStatusDot');
+          const badge = document.getElementById('mockStatusBadge');
+          if (!dot || !badge) return;
+          if (data.running) {
+            dot.style.background = '#10b981';
+            dot.style.boxShadow = '0 0 8px #10b981';
+            badge.style.background = 'rgba(16,185,129,0.2)';
+            badge.style.color = '#10b981';
+            badge.textContent = `Running on :${data.port}`;
+          } else {
+            dot.style.background = '#ef4444';
+            dot.style.boxShadow = '0 0 8px #ef4444';
+            badge.style.background = 'rgba(239,68,68,0.2)';
+            badge.style.color = '#ef4444';
+            badge.textContent = 'Stopped';
+          }
+        })
+        .catch(() => {});
+    }
+
+    function toggleMockServer() {
+      const endpoint = mockRunning ? '/api/mock/stop' : '/api/mock/start';
+      fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ port: 8080 })
+      })
+      .then(r => r.json())
+      .then(() => {
+        checkMockStatus();
+      });
+    }
+
+    function fillMockEndpoints() {
+      document.getElementById('quickUrl').value = 'http://localhost:8080/fast';
+      document.getElementById('abUrlA').value = 'http://localhost:8080/fast';
+      document.getElementById('abUrlB').value = 'http://localhost:8080/slow?delay=40';
+      if (!mockRunning) {
+        toggleMockServer();
+      }
+    }
+
+    // A/B Test Runner
+    function runAbTest() {
+      const urlA = document.getElementById('abUrlA').value;
+      const urlB = document.getElementById('abUrlB').value;
+      const duration = parseInt(document.getElementById('abDuration').value);
+      const concurrency = parseInt(document.getElementById('abConcurrency').value);
+      const rps = parseInt(document.getElementById('abRps').value);
+      const maxLatencyDiff = parseInt(document.getElementById('abMaxLatencyDiff').value);
+
+      if (!urlA || !urlB) {
+        alert('Please specify both Variant A and Variant B URLs');
+        return;
+      }
+
+      const reportName = `ab-${new Date().toISOString().split('T')[0]}-${Date.now()}`;
+      document.getElementById('test-progress').style.display = 'block';
+      document.getElementById('progressFill').style.width = '0%';
+
+      let progressPercent = 0;
+
+      fetch('/api/ab', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ urlA, urlB, duration, concurrency, rps, reportName, maxLatencyDiff })
+      })
+      .then(r => r.body.getReader())
+      .then(reader => {
+        const decoder = new TextDecoder();
+        function readChunk() {
+          reader.read().then(({ done, value }) => {
+            if (done) return;
+            const text = decoder.decode(value);
+            const lines = text.split('\n\n');
+            for (const line of lines) {
+              if (line.startsWith('data: ')) {
+                try {
+                  const data = JSON.parse(line.slice(6));
+                  if (data.type === 'progress') {
+                    progressPercent = Math.min(progressPercent + 8, 90);
+                    document.getElementById('progressFill').style.width = progressPercent + '%';
+                  } else if (data.type === 'complete') {
+                    document.getElementById('progressFill').style.width = '100%';
+                    displayAbResults(data);
+                    setTimeout(() => {
+                      document.getElementById('test-progress').style.display = 'none';
+                      loadHistory();
+                    }, 1000);
+                  }
+                } catch (e) {}
+              }
+            }
+            readChunk();
+          });
+        }
+        readChunk();
+      })
+      .catch(err => {
+        document.getElementById('test-progress').style.display = 'none';
+        document.getElementById('results-area').innerHTML = `<div class="alert alert-error">A/B Test Error: ${err.message}</div>`;
+      });
+    }
+
+    function displayAbResults(data) {
+      const diff = data.diff;
+      if (!diff) {
+        document.getElementById('results-area').innerHTML = `<div class="alert alert-success">A/B Test Complete. Report: ${data.reportName}</div>`;
+        return;
+      }
+
+      const winnerText = diff.winner === 'B' ? '🏆 Variant B is WINNER (Faster)' :
+                         diff.winner === 'A' ? '⚠️ Variant A was Faster (Regression in B)' :
+                         '⚖️ Comparable Performance';
+      const winnerColor = diff.winner === 'B' ? 'var(--success)' : diff.winner === 'A' ? 'var(--error)' : 'var(--text-primary)';
+
+      const html = `
+        <div style="background:var(--bg-tertiary);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:20px;">
+          <h3 style="color:${winnerColor};margin-bottom:10px;">${winnerText}</h3>
+          ${diff.isRegression ? `<div class="alert alert-error">Performance Regression: ${diff.regressionReason}</div>` : ''}
+          <div class="stats-grid" style="margin-top:15px;">
+            <div class="stat-box">
+              <div class="stat-label">Variant A Latency (p95)</div>
+              <div class="stat-value">${diff.latencies.p95.a.toFixed(1)}ms</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-label">Variant B Latency (p95)</div>
+              <div class="stat-value">${diff.latencies.p95.b.toFixed(1)}ms</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-label">Latency Delta (p95)</div>
+              <div class="stat-value" style="color:${diff.latencies.p95.pct <= 0 ? 'var(--success)' : 'var(--error)'}">${diff.latencies.p95.pct > 0 ? '+' : ''}${diff.latencies.p95.pct.toFixed(1)}%</div>
+            </div>
+          </div>
+          <p style="color:var(--text-tertiary);font-size:12px;margin-top:10px;">Full reports generated: reports/${data.reportName}.json, .html, .md</p>
+        </div>
+      `;
+      document.getElementById('results-area').innerHTML = html;
+    }
+
+    // Load history and check mock server status on page load
     loadHistory();
+    checkMockStatus();
+    setInterval(checkMockStatus, 5000);
   </script>
 </body>
 </html>

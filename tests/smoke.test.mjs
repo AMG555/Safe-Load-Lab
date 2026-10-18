@@ -35,3 +35,12 @@ test('plans advanced local config', () => {
   assert.match(res.stdout, /Stages:/);
   assert.match(res.stdout, /graphql-viewer/);
 });
+
+test('prints help with ab, mock, and import-curl commands', () => {
+  const res = run(['help']);
+  assert.equal(res.status, 0);
+  assert.match(res.stdout, /ab, diff/);
+  assert.match(res.stdout, /mock/);
+  assert.match(res.stdout, /import-curl/);
+});
+

@@ -17,11 +17,12 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
+          cache: 'npm'
       - name: Install dependencies
         run: npm ci
       - name: Run tests
-        run: npm test
+        run: npm run test:all
       - name: Build package
         run: npm pack
       - name: Create Release

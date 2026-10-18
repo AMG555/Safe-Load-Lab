@@ -6,7 +6,10 @@ reports/*.json
 reports/*.csv
 reports/*.html
 reports/*.xml
+reports/*.md
+reports/failures/
 !reports/.gitkeep
+
 
 # Logs
 *.log

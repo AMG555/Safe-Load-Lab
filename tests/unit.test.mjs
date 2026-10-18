@@ -2,52 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { performance } from 'node:perf_hooks';
 
-// Mock implementations of core functions for testing
-function calculatePercentiles(values, percentiles) {
-  if (!values.length) return percentiles.reduce((acc, p) => ({ ...acc, [p]: 0 }), {});
-  const sorted = [...values].sort((a, b) => a - b);
-  return percentiles.reduce((acc, p) => {
-    const idx = Math.ceil((p / 100) * sorted.length) - 1;
-    acc[p] = sorted[Math.max(0, Math.min(sorted.length - 1, idx))];
-    return acc;
-  }, {});
-}
+import {
+  calculatePercentiles,
+  getByPath,
+  setByPath,
+  renderTemplate,
+  pickEndpoint
+} from '../bin/safe-load-lab.js';
 
-function getByPath(obj, dottedPath) {
-  if (!dottedPath) return undefined;
-  return String(dottedPath).split('.').reduce((acc, key) => acc == null ? undefined : acc[key], obj);
-}
-
-function setByPath(obj, dottedPath, value) {
-  const parts = String(dottedPath).split('.');
-  let cur = obj;
-  for (let i = 0; i < parts.length - 1; i++) {
-    cur[parts[i]] ||= {};
-    cur = cur[parts[i]];
-  }
-  cur[parts.at(-1)] = value;
-}
-
-function renderTemplate(value, vars) {
-  if (typeof value === 'string') {
-    return value.replace(/\{\{\s*([\w.:-]+)\s*\}\}/g, (_, key) => {
-      const v = getByPath(vars, key);
-      return v == null ? '' : String(v);
-    });
-  }
-  if (Array.isArray(value)) return value.map(v => renderTemplate(v, vars));
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, renderTemplate(v, vars)]));
-  }
-  return value;
-}
-
-function pickEndpoint(endpoints) {
-  const total = endpoints.reduce((sum, ep) => sum + Math.max(0, ep.weight), 0);
-  let r = Math.random() * total;
-  for (const ep of endpoints) { r -= Math.max(0, ep.weight); if (r <= 0) return ep; }
-  return endpoints[0];
-}
 
 test('calculatePercentiles - basic functionality', () => {
   const values = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];

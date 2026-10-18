@@ -1,0 +1,91 @@
+name: 'Safe Load Lab'
+description: 'Safe, deterministic HTTP load & A/B performance regression testing with automatic step summaries'
+author: 'Amal George'
+branding:
+  icon: 'zap'
+  color: 'green'
+
+inputs:
+  command:
+    description: 'Command to run (run, ab, diff, spike, soak, mock)'
+    required: false
+    default: 'run'
+  url:
+    description: 'Target URL for load test'
+    required: false
+  config:
+    description: 'Path to test configuration JSON'
+    required: false
+  url-a:
+    description: 'Variant A URL for A/B testing'
+    required: false
+  url-b:
+    description: 'Variant B URL for A/B testing'
+    required: false
+  duration:
+    description: 'Duration in seconds'
+    required: false
+    default: '10'
+  concurrency:
+    description: 'Max concurrency'
+    required: false
+    default: '5'
+  rps:
+    description: 'Target RPS'
+    required: false
+    default: '10'
+  max-latency-diff:
+    description: 'Max acceptable latency regression percent in A/B test (e.g. 10 for 10%)'
+    required: false
+  max-error-diff:
+    description: 'Max acceptable error rate regression difference (e.g. 0.05 for 5%)'
+    required: false
+  extra-args:
+    description: 'Additional arguments to pass to safe-load-lab CLI'
+    required: false
+    default: ''
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+
+    - name: Install Safe Load Lab
+      shell: bash
+      run: |
+        cd "${{ github.action_path }}"
+        npm ci --omit=dev
+        npm link
+
+    - name: Execute Safe Load Lab
+      shell: bash
+      run: |
+        CMD="${{ inputs.command }}"
+        ARGS="--i-own-this-target --duration ${{ inputs.duration }} --concurrency ${{ inputs.concurrency }} --rps ${{ inputs.rps }}"
+        
+        if [ -n "${{ inputs.url }}" ]; then
+          ARGS="$ARGS --url ${{ inputs.url }}"
+        fi
+        if [ -n "${{ inputs.config }}" ]; then
+          ARGS="$ARGS --config ${{ inputs.config }}"
+        fi
+        if [ -n "${{ inputs.url-a }}" ]; then
+          ARGS="$ARGS --url-a ${{ inputs.url-a }}"
+        fi
+        if [ -n "${{ inputs.url-b }}" ]; then
+          ARGS="$ARGS --url-b ${{ inputs.url-b }}"
+        fi
+        if [ -n "${{ inputs.max-latency-diff }}" ]; then
+          ARGS="$ARGS --max-latency-diff ${{ inputs.max-latency-diff }}"
+        fi
+        if [ -n "${{ inputs.max-error-diff }}" ]; then
+          ARGS="$ARGS --max-error-diff ${{ inputs.max-error-diff }}"
+        fi
+        if [ -n "${{ inputs.extra-args }}" ]; then
+          ARGS="$ARGS ${{ inputs.extra-args }}"
+        fi
+        
+        safe-load-lab $CMD $ARGS

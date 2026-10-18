@@ -1,6 +1,51 @@
 # Changelog
 
-## 2.0.1 - Performance & Testing Enhancement Release
+## 2.2.0 - A/B Differential Testing, Hermetic Mock Server & cURL Import
+
+### 🚀 Major New Features
+
+- **⚖️ A/B Differential Load Testing (`sll ab` / `sll diff`)**
+  - Run side-by-side or sequential load tests comparing two URLs, configs, or environments
+  - Automated statistical delta for throughput, error rate, and latency percentiles (avg, p50, p90, p95, p99)
+  - Regression threshold gating (`--max-latency-diff`, `--max-error-diff`) with non-zero exit code for CI/CD gates
+  - Beautiful color-coded terminal comparison table
+  - Dedicated A/B reports in JSON, HTML, and Markdown formats
+
+- **🧪 Hermetic Built-in Mock Server (`sll mock`)**
+  - Zero-dependency local test server built with `node:http`
+  - Specialized benchmarking endpoints:
+    - `/health` - status, version, uptime, timestamp
+    - `/fast` - immediate 200 OK
+    - `/slow?delay=ms` - simulated backend latency
+    - `/error?status=code` - simulated HTTP error codes
+    - `/rate-limit?limit=X&window=Y` - sliding-window 429 rate limiting with `Retry-After`
+    - `/echo` - echoes headers, method, and request body
+    - `/json` - structured mock user data
+  - Enables 100% hermetic, zero-flake local tests and CI smoke tests
+
+- **⚡ cURL Command Import (`sll import-curl` & `--curl`)**
+  - Directly run load tests from a copied cURL command string (`sll run --curl "curl ..."` )
+  - Convert cURL commands into reusable JSON configs (`sll import-curl "..." --out config.json`)
+  - Parses HTTP method, URL, headers, and request bodies
+
+- **📊 Web UI & Dashboard Superpowers**
+  - Dedicated interactive A/B Testing panel
+  - One-click Local Mock Server toggling and endpoint auto-fill
+  - Fixed UI SSE metrics property mapping (`totals.requests`, `totals.failed`, `latencyMs.*`)
+  - Standalone binary invocation (`process.execPath`) for universal portability without global npm links
+
+### 🛡️ Testing & CI/CD Enhancements
+
+- **63 Comprehensive Automated Tests (100% Pass)**
+  - `tests/ab.test.mjs` - A/B differential testing, regression detection, report generation
+  - `tests/qa.test.mjs` - End-to-end QA covering mock server routes, cURL parser, assertions, limits, and CLI error handling
+  - Updated `tests/unit.test.mjs` to test real exported module functions
+- **GitHub Actions Fixes & Modernization**
+  - Fixed `ERR_MODULE_NOT_FOUND: Cannot find package 'chalk'` by ensuring `npm ci` runs before `npm install -g .`
+  - Upgraded workflow runners to Node.js 22 with dependency caching (`cache: 'npm'`)
+  - Replaced unreliable external network target (Google) with hermetic local mock server
+
+
 
 ### 🚀 Performance Improvements
 

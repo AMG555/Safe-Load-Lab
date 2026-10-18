@@ -2,36 +2,37 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js 18+](https://img.shields.io/badge/node-%3E%3D18-green.svg)](https://nodejs.org/)
-[![Version](https://img.shields.io/badge/version-2.0.1-blue.svg)](https://github.com/amg555/Safe-Load-Lab/releases)
-[![CI](https://github.com/amg555/Safe-Load-Lab/actions/workflows/safe-load-lab.yml/badge.svg)](https://github.com/amg555/Safe-Load-Lab/actions/workflows/safe-load-lab.yml)
+[![Version](https://img.shields.io/badge/version-2.2.0-blue.svg)](https://github.com/AMG555/Safe-Load-Lab/releases)
+[![CI](https://github.com/AMG555/Safe-Load-Lab/actions/workflows/safe-load-lab.yml/badge.svg)](https://github.com/AMG555/Safe-Load-Lab/actions/workflows/safe-load-lab.yml)
 
-A production-ready, feature-rich CLI for **controlled load testing** of applications you own or have explicit permission to test.
+A production-ready, feature-rich CLI for **controlled load testing**, **A/B differential benchmarking**, and **performance regression detection** of applications you own or have explicit permission to test.
 
 This is **not** a DDoS tool. It is designed for safe capacity, performance, rate-limit, auth-flow, GraphQL, and resilience testing with built-in safety limits and ethical use guidelines.
 
-## 🚀 Latest: v2.0.1 Performance Improvements
+## 🚀 What's New in v2.2.0
 
-- **35% more accurate** RPS targeting with adaptive timing
-- **70%+ faster** report generation with optimized percentile calculations
-- **20% faster** throughput with HTTP connection reuse (keep-alive)
-- **20% less** memory usage with optimized response handling
-- **8x more tests** - expanded from 4 to 32+ comprehensive tests
-- **Real-time RPS monitoring** in progress output
-
-[📊 See detailed performance analysis →](PERFORMANCE_IMPROVEMENTS.md) | [📝 Full changelog →](CHANGELOG.md)
-
+- ⚖️ **A/B Differential Load Testing (`sll ab`)**: Compare two endpoints or environments side-by-side with statistical latency delta, RPS comparison, automated winner determination, and performance regression gates for CI/CD.
+- 🧪 **Hermetic Mock Server (`sll mock`)**: Built-in zero-dependency HTTP mock server (`/health`, `/fast`, `/slow`, `/error`, `/rate-limit`, `/echo`, `/json`) for 100% flake-free local testing and CI benchmarks.
+- ⚡ **cURL Import (`sll import-curl` & `--curl`)**: Convert any browser/Postman cURL command directly into a reproducible load test.
+- 📊 **Enhanced Web UI Dashboard**: Interactive dark-mode dashboard with dedicated A/B Testing panel, one-click mock server launcher, and real-time streaming progress.
+- 🛡️ **63 Automated Quality Tests**: 100% passing test coverage across Unit, Integration, Performance, Smoke, A/B, and QA suites.
+- ⚙️ **Modern Node 22 Support**: Updated GitHub Actions CI with npm caching, automated mock server startup, and artifact generation.
 
 ## 🎯 Why Safe Load Lab?
 
-- **Zero Dependencies** - Uses only Node.js built-ins
-- **Production-Ready** - Used by teams for real load testing
-- **Feature-Rich** - Spike, soak, stress tests, webhooks, Slack integration
-- **Safe by Design** - Hard-coded safety limits prevent abuse
-- **Developer-Friendly** - Simple CLI, JSON configs, multiple report formats
-- **CI/CD Ready** - Perfect for automated testing pipelines
+- **Zero-Friction Sandbox** - Built-in mock server means you can start testing immediately without spinning up target servers
+- **A/B Regression Gate** - Catch latency degradation in PRs before shipping to production
+- **cURL Native** - Copy request as cURL from Chrome DevTools and run a load test in seconds
+- **Production-Ready** - Used by developers and QA engineers for controlled load testing
+- **Feature-Rich** - Spike, soak, stress, A/B tests, webhooks, Slack alerts, assertions, and retries
+- **Safe by Design** - Hard-coded safety limits prevent accidental abuse
+- **Developer-Friendly** - Beautiful colored CLI, JSON configs, HTML/Markdown reports, and Web UI
 
 ## Features
 
+- ✅ **A/B Differential Testing** - Automated side-by-side endpoint comparison with regression alerts
+- ✅ **Hermetic Mock Server** - Zero-dependency local test server for reliable benchmarking
+- ✅ **cURL Command Import** - Run tests directly from cURL commands
 - ✅ **Controlled Load Testing** - Configurable concurrency, RPS, and duration with hard safety limits
 - ✅ **Staged Testing** - Warm-up, steady-state, and cool-down phases
 - ✅ **Spike Testing** - Test system behavior under sudden traffic increases
@@ -44,10 +45,11 @@ This is **not** a DDoS tool. It is designed for safe capacity, performance, rate
 - ✅ **Report Comparison** - Side-by-side comparison of test runs
 - ✅ **Webhook Integration** - Send results to custom webhooks
 - ✅ **Slack Notifications** - Real-time test results in Slack
-- ✅ **Multiple Report Formats** - JSON, CSV, HTML, and JUnit XML reports
+- ✅ **Multiple Report Formats** - JSON, CSV, HTML, Markdown, and JUnit XML reports
+- ✅ **Interactive Web UI** - Modern dashboard for visual test management
 - ✅ **Docker Support** - Containerized testing environment
-- ✅ **CI/CD Ready** - Exit codes suitable for automation
-- ✅ **Built-in Safety** - Hard caps on duration, concurrency, RPS, and body size
+- ✅ **CI/CD Ready** - Hermetic CI workflow with exit codes suitable for automation
+
 
 ## Quick Links
 
@@ -308,24 +310,42 @@ docker run --rm safe-load-lab run \
   --i-own-this-target
 ```
 
-## CI/CD
+## CI/CD & GitHub Actions
 
-Example GitHub Actions workflow: [.github/workflows/safe-load-lab.yml](.github/workflows/safe-load-lab.yml)
+### As a Reusable GitHub Action
+
+Drop Safe Load Lab directly into any repository's CI pipeline with automatic Step Summary markdown reports:
+
+```yaml
+- name: Performance Regression Gate
+  uses: AMG555/Safe-Load-Lab@main
+  with:
+    command: ab
+    url-a: 'https://staging-v1.example.com/api'
+    url-b: 'https://staging-v2.example.com/api'
+    max-latency-diff: 15
+    duration: 10
+```
+
+### CLI in GitHub Actions
 
 ```yaml
 - name: Install CLI
-  run: npm install -g .
-  working-directory: safe-load-lab
-- name: Run controlled test
   run: |
-    sll run \
-      --config examples/advanced.json \
-      --env staging \
-      --i-own-this-target \
-      --out reports/staging-report.json \
-      --html reports/staging-report.html
-  working-directory: safe-load-lab
+    npm ci
+    npm install -g .
+- name: Run A/B Differential Gate
+  run: |
+    sll ab \
+      --url-a http://127.0.0.1:8080/fast \
+      --url-b http://127.0.0.1:8080/slow?delay=50 \
+      --duration 5 \
+      --max-latency-diff 20 \
+      --i-own-this-target
 ```
+
+*Note: In GitHub Actions, markdown comparison tables and pass/fail verdicts automatically append to `$GITHUB_STEP_SUMMARY` for instant pull request and run dashboard visibility!*
+
 
 ## Exit Codes
 
