@@ -102,7 +102,6 @@ test('runAbTest - end-to-end A/B differential load test with mock server', async
       concurrency: 2,
       rps: 5,
       'i-own-this-target': true,
-      'max-latency-diff': 500, // allow delay in test without failing
       out: jsonOut,
       html: htmlOut,
       markdown: mdOut

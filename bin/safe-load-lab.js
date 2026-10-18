@@ -1801,7 +1801,6 @@ async function runAbTest(args) {
 
   if (diff.isRegression) {
     console.log(chalk.bold.red(`\n❌ PERFORMANCE REGRESSION DETECTED: ${diff.regressionReason}`));
-    process.exitCode = 2;
   } else {
     console.log(chalk.bold.green(`\n✅ A/B Test Passed: No performance regressions detected.`));
   }
@@ -1872,7 +1871,8 @@ async function main() {
   }
   if (!args['i-own-this-target']) throw new Error('Missing required safety flag: --i-own-this-target');
   if (command === 'ab' || command === 'diff') {
-    await runAbTest(args);
+    const { diff } = await runAbTest(args);
+    if (diff.isRegression) process.exitCode = 2;
     return;
   }
   if (command === 'rate-limit') { await runRateLimitCheck(args); return; }
