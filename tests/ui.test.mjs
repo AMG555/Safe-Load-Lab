@@ -176,4 +176,33 @@ test('UI Server API Suite', async (t) => {
     assert.match(text, /# HELP safeloadlab_active_test/);
     assert.match(text, /safeloadlab_mock_running/);
   });
+
+  await t.test('POST /api/export/k6 generates k6 script', async () => {
+    const sampleConfig = {
+      name: 'ui-k6-export',
+      endpoints: [{ name: 'ep', url: 'http://127.0.0.1:8080/fast', method: 'GET' }]
+    };
+    const { status, data } = await requestJson('/api/export/k6', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config: sampleConfig })
+    });
+    assert.equal(status, 200);
+    assert.match(data.script, /import http from 'k6\/http'/);
+  });
+
+  await t.test('POST /api/export/postman generates Postman collection', async () => {
+    const sampleConfig = {
+      name: 'ui-postman-export',
+      endpoints: [{ name: 'ep', url: 'http://127.0.0.1:8080/fast', method: 'GET' }]
+    };
+    const { status, data } = await requestJson('/api/export/postman', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config: sampleConfig })
+    });
+    assert.equal(status, 200);
+    assert.equal(data.collection.info.name, 'ui-postman-export');
+    assert.equal(data.collection.item.length, 1);
+  });
 });

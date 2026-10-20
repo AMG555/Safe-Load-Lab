@@ -3,18 +3,37 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { performance } from 'node:perf_hooks';
 import chalk from 'chalk';
 import cliProgress from 'cli-progress';
 
-const VERSION = '2.2.0';
-const HARD_LIMITS = {
+const VERSION = '2.3.0';
+
+const BASE_LIMITS = {
   maxDurationSeconds: 600,
   maxConcurrency: 100,
   maxRps: 200,
   maxBodyBytes: 1024 * 1024
 };
+
+const UNLOCKED_LIMITS = {
+  maxDurationSeconds: 86400,
+  maxConcurrency: 2000,
+  maxRps: 10000,
+  maxBodyBytes: 10 * 1024 * 1024
+};
+
+let HARD_LIMITS = { ...BASE_LIMITS };
+
+function setHighCapacityMode(enabled = true) {
+  if (enabled) {
+    HARD_LIMITS = { ...UNLOCKED_LIMITS };
+  } else {
+    HARD_LIMITS = { ...BASE_LIMITS };
+  }
+}
 
 /**
  * @typedef {Object} LoadTestConfig
@@ -191,6 +210,8 @@ Commands:
   import-postman  Convert Postman Collection JSON to Safe Load Lab test config
   import-openapi  Convert OpenAPI/Swagger JSON to Safe Load Lab test config
   import-har      Convert browser HAR (HTTP Archive) recording to Safe Load Lab test config
+  export-k6       Export Safe Load Lab config to modern k6 JS script
+  export-postman  Export Safe Load Lab config to Postman Collection v2.1
   validate        Validate and normalize a config without sending traffic
   plan            Show resolved test plan without sending traffic
   sample          Create a sample config file
@@ -215,6 +236,8 @@ Common options:
   --data <file>             CSV data feed file for parameterization ({{data.column}})
   --data-mode <mode>        Data selection: round-robin (default) or random
   --include-assets          Include static assets (css, images, fonts) when importing HAR
+  --unlock-limits           Unlock safety caps for high-capacity stress testing (up to 24h, 2000c, 10k RPS)
+  --high-capacity           Alias for --unlock-limits
   --duration <seconds>      Test duration, max ${HARD_LIMITS.maxDurationSeconds}, default 30
   --concurrency <number>    Max concurrent workers, max ${HARD_LIMITS.maxConcurrency}, default 5
   --rps <number>            Max requests per second, max ${HARD_LIMITS.maxRps}, default 10
@@ -274,7 +297,7 @@ function parseArgs(argv) {
     const item = argv[i];
     if (!item.startsWith('--')) { args._.push(item); continue; }
     const key = item.slice(2);
-    if (['i-own-this-target', 'include-assets', 'realistic', 'verbose', 'debug'].includes(key)) {
+    if (['i-own-this-target', 'include-assets', 'realistic', 'verbose', 'debug', 'unlock-limits', 'high-capacity'].includes(key)) {
       args[key] = true;
       continue;
     }
@@ -283,6 +306,9 @@ function parseArgs(argv) {
     i++;
     if (key === 'header') { args.header = args.header || []; args.header.push(value); }
     else args[key] = value;
+  }
+  if (args['unlock-limits'] || args['high-capacity']) {
+    setHighCapacityMode(true);
   }
   return args;
 }
@@ -395,9 +421,46 @@ function parseCsvData(content) {
   return rows;
 }
 
+function resolveDynamicGenerator(key) {
+  if (key === '$uuid' || key === '$guid') {
+    return crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2, 10);
+  }
+  if (key === '$timestamp') {
+    return String(Date.now());
+  }
+  if (key === '$isoDate') {
+    return new Date().toISOString();
+  }
+  if (key === '$randomEmail') {
+    return `user_${Math.random().toString(36).slice(2, 8)}@example.com`;
+  }
+  if (key.startsWith('$randomInt')) {
+    const parts = key.split(':');
+    const min = parts[1] !== undefined ? parseInt(parts[1], 10) : 1;
+    const max = parts[2] !== undefined ? parseInt(parts[2], 10) : 1000;
+    return String(Math.floor(Math.random() * (max - min + 1)) + min);
+  }
+  if (key.startsWith('$randomAlpha') || key.startsWith('$randomString')) {
+    const parts = key.split(':');
+    const len = parts[1] !== undefined ? parseInt(parts[1], 10) : 8;
+    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let str = '';
+    for (let i = 0; i < len; i++) str += chars[Math.floor(Math.random() * chars.length)];
+    return str;
+  }
+  if (key === '$randomIp') {
+    return `${Math.floor(Math.random() * 254) + 1}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 254) + 1}`;
+  }
+  return null;
+}
+
 function renderTemplate(value, vars) {
   if (typeof value === 'string') {
-    return value.replace(/\{\{\s*([\w.:-]+)\s*\}\}/g, (_, key) => {
+    return value.replace(/\{\{\s*([$\w.:-]+)\s*\}\}/g, (_, key) => {
+      if (key.startsWith('$')) {
+        const dynamicVal = resolveDynamicGenerator(key);
+        if (dynamicVal !== null) return dynamicVal;
+      }
       const v = getByPath(vars, key) ?? process.env[key];
       return v == null ? '' : String(v);
     });
@@ -456,12 +519,18 @@ function normalizeStages(config) {
 }
 
 function applyCliOverrides(config, args) {
-  const loadShapeOverridden = args.duration !== undefined || args.concurrency !== undefined || args.rps !== undefined;
+  const hasCliDuration = args.duration !== undefined;
+  const hasCliConcurrency = args.concurrency !== undefined && args.concurrency !== config.concurrency;
+  const hasCliRps = args.rps !== undefined && args.rps !== config.rps;
+  const hasCliTimeout = args.timeout !== undefined;
+
+  const loadShapeOverridden = hasCliDuration || hasCliConcurrency || hasCliRps;
   if (loadShapeOverridden) config.stages = undefined;
-  if (args.duration !== undefined) config.durationSeconds = args.duration;
+  if (hasCliDuration) config.durationSeconds = args.duration;
   if (args.concurrency !== undefined) config.concurrency = args.concurrency;
   if (args.rps !== undefined) config.rps = args.rps;
-  if (args.timeout !== undefined) config.timeoutMs = args.timeout;
+  if (hasCliTimeout) config.timeoutMs = args.timeout;
+  if (args.thresholds && !config.thresholds) config.thresholds = args.thresholds;
   return config;
 }
 
@@ -720,6 +789,99 @@ function parseHarRecording(content, options = {}) {
   };
 }
 
+function exportToK6(config) {
+  const norm = normalizeConfig({ ...config, _: ['run'] });
+  const stages = norm.stages.map(s => `    { duration: '${s.durationSeconds}s', target: ${s.concurrency} }`).join(',\n');
+  const eps = norm.endpoints && norm.endpoints.length > 0
+    ? norm.endpoints
+    : (norm.scenarios ? norm.scenarios.flatMap(s => s.steps || []) : []);
+
+  const thresholds = [];
+  if (norm.thresholds?.p95Ms) thresholds.push(`    http_req_duration: ['p(95)<${norm.thresholds.p95Ms}']`);
+  if (norm.thresholds?.maxErrorRate !== undefined) thresholds.push(`    http_req_failed: ['rate<=${norm.thresholds.maxErrorRate}']`);
+
+  const requestsCode = eps.map((ep, idx) => {
+    const method = ep.method.toLowerCase();
+    const headersStr = Object.keys(ep.headers || {}).length ? JSON.stringify(ep.headers) : '{}';
+    const bodyStr = ep.body ? JSON.stringify(ep.body) : 'null';
+    let code = '';
+    if (['post', 'put', 'patch'].includes(method)) {
+      code = `  const res${idx + 1} = http.${method}('${ep.url}', ${bodyStr}, { headers: ${headersStr} });`;
+    } else {
+      code = `  const res${idx + 1} = http.${method}('${ep.url}', { headers: ${headersStr} });`;
+    }
+    const checkStatus = ep.expectStatus ? (Array.isArray(ep.expectStatus) ? `[${ep.expectStatus.join(', ')}].includes(r.status)` : `r.status === ${ep.expectStatus}`) : 'r.status === 200';
+    return `${code}\n  check(res${idx + 1}, {\n    '${ep.name} status check': (r) => ${checkStatus},\n  });`;
+  }).join('\n\n');
+
+  return `// Safe Load Lab — Exported k6 Load Test Script
+import http from 'k6/http';
+import { check, sleep } from 'k6';
+
+export const options = {
+  stages: [
+${stages}
+  ],
+  thresholds: {
+${thresholds.join(',\n')}
+  }
+};
+
+export default function () {
+${requestsCode}
+  sleep(1);
+}
+`;
+}
+
+function exportToPostman(config) {
+  const norm = normalizeConfig({ ...config, _: ['run'] });
+  const eps = norm.endpoints && norm.endpoints.length > 0
+    ? norm.endpoints
+    : (norm.scenarios ? norm.scenarios.flatMap(s => s.steps || []) : []);
+  const items = eps.map(ep => {
+    const headers = Object.entries(ep.headers || {}).map(([key, value]) => ({ key, value }));
+    const u = new URL(ep.url);
+    const pathParts = u.pathname.split('/').filter(Boolean);
+
+    const reqItem = {
+      name: ep.name,
+      request: {
+        method: ep.method,
+        header: headers,
+        url: {
+          raw: ep.url,
+          protocol: u.protocol.replace(':', ''),
+          host: u.host.split('.'),
+          path: pathParts
+        }
+      }
+    };
+
+    if (ep.body && ['POST', 'PUT', 'PATCH'].includes(ep.method)) {
+      reqItem.request.body = {
+        mode: 'raw',
+        raw: typeof ep.body === 'string' ? ep.body : JSON.stringify(ep.body, null, 2),
+        options: {
+          raw: {
+            language: 'json'
+          }
+        }
+      };
+    }
+
+    return reqItem;
+  });
+
+  return JSON.stringify({
+    info: {
+      name: norm.name || 'safe-load-lab-collection',
+      schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json'
+    },
+    item: items
+  }, null, 2);
+}
+
 function startMockServer(port = 8080, host = '127.0.0.1') {
   const requestHistory = new Map(); // ip -> [timestamps]
   const mockItems = [{ id: 1, name: 'Item 1' }, { id: 2, name: 'Item 2' }];
@@ -882,30 +1044,35 @@ function normalizeConfig(args) {
     const ep = parseCurlCommand(args.curl);
     config = {
       name: ep.name || 'curl-imported-test',
-      durationSeconds: args.duration,
+      durationSeconds: args.durationSeconds ?? args.duration,
       concurrency: args.concurrency,
       rps: args.rps,
-      timeoutMs: args.timeout,
+      timeoutMs: args.timeoutMs ?? args.timeout,
       endpoints: [ep]
     };
-  } else if (args.config) config = JSON.parse(fs.readFileSync(args.config, 'utf8'));
-  else if (args.endpoints && Array.isArray(args.endpoints)) {
+  } else if (args.config) {
+    config = JSON.parse(fs.readFileSync(args.config, 'utf8'));
+  } else if ((args.endpoints && Array.isArray(args.endpoints)) || (args.scenarios && Array.isArray(args.scenarios))) {
     config = {
+      ...args,
       name: args.name || 'custom-test',
-      durationSeconds: args.duration,
+      durationSeconds: args.durationSeconds ?? args.duration,
       concurrency: args.concurrency,
       rps: args.rps,
-      timeoutMs: args.timeout,
-      endpoints: args.endpoints
+      timeoutMs: args.timeoutMs ?? args.timeout,
+      endpoints: args.endpoints || [],
+      scenarios: args.scenarios,
+      stages: args.stages,
+      thresholds: args.thresholds || {}
     };
   } else {
     if (!args.url) throw new Error('Provide --config <file>, --url <url>, or --curl "<command>"');
     config = {
       name: 'simple-test',
-      durationSeconds: args.duration,
+      durationSeconds: args.durationSeconds ?? args.duration,
       concurrency: args.concurrency,
       rps: args.rps,
-      timeoutMs: args.timeout,
+      timeoutMs: args.timeoutMs ?? args.timeout,
       endpoints: [{ name: 'default', url: args.url, method: args.method || 'GET', headers: parseHeaders(args.header), body: args.body, weight: 1 }]
     };
   }
@@ -954,8 +1121,25 @@ function normalizeConfig(args) {
     normalized.data = config.data;
   }
 
-  if (!Array.isArray(normalized.endpoints) || normalized.endpoints.length === 0) throw new Error('Config must contain at least one endpoint');
-  normalized.endpoints = normalized.endpoints.map((ep, idx) => normalizeEndpoint(ep, idx, normalized.variables));
+  if (Array.isArray(config.scenarios) && config.scenarios.length > 0) {
+    normalized.scenarios = config.scenarios.map((sc, scIdx) => ({
+      name: sc.name || `scenario-${scIdx + 1}`,
+      weight: Number(sc.weight || 1),
+      steps: (sc.steps || []).map((step, sIdx) => ({
+        ...normalizeEndpoint(step, sIdx, normalized.variables),
+        extract: step.extract || null,
+        continueOnFailure: Boolean(step.continueOnFailure)
+      }))
+    }));
+  }
+
+  const hasEndpoints = Array.isArray(normalized.endpoints) && normalized.endpoints.length > 0;
+  const hasScenarios = Array.isArray(normalized.scenarios) && normalized.scenarios.length > 0;
+  if (!hasEndpoints && !hasScenarios) throw new Error('Config must contain at least one endpoint or scenario');
+
+  if (hasEndpoints) {
+    normalized.endpoints = normalized.endpoints.map((ep, idx) => normalizeEndpoint(ep, idx, normalized.variables));
+  }
   normalized.setup = normalized.setup.map((ep, idx) => ({ ...normalizeEndpoint(ep, idx, normalized.variables), extract: ep.extract || {} }));
   return normalized;
 }
@@ -1009,7 +1193,12 @@ function summarize(results, startedAt, finishedAt, config) {
     samples: []
   };
 
+  let totalBytesSent = 0;
+  let totalBytesReceived = 0;
+
   for (const r of results) {
+    totalBytesSent += (r.bytesSent || 0);
+    totalBytesReceived += (r.bytesReceived || 0);
     byStatus[r.status || 'error'] = (byStatus[r.status || 'error'] || 0) + 1;
     byEndpoint[r.endpoint] ||= { total: 0, failed: 0, durations: [] };
     byEndpoint[r.endpoint].total++;
@@ -1076,6 +1265,10 @@ function summarize(results, startedAt, finishedAt, config) {
   const elapsedSeconds = (finishedAt - startedAt) / 1000;
   const avg = durations.length ? durations.reduce((a, b) => a + b, 0) / durations.length : 0;
   const metrics = { errorRate: total ? failed / total : 0, p95: globalPercentiles[95], p99: globalPercentiles[99], avg };
+  const totalBytes = totalBytesSent + totalBytesReceived;
+  const throughputKbps = elapsedSeconds > 0 ? (totalBytes / 1024) / elapsedSeconds : 0;
+  const throughputMbps = elapsedSeconds > 0 ? (totalBytes / (1024 * 1024)) / elapsedSeconds : 0;
+
   return {
     testName: config.name,
     startedAt: new Date(startedAt).toISOString(),
@@ -1083,6 +1276,7 @@ function summarize(results, startedAt, finishedAt, config) {
     elapsedSeconds,
     requested: { durationSeconds: config.durationSeconds, concurrency: config.concurrency, rps: config.rps, stages: config.stages },
     totals: { requests: total, failed, errorRate: metrics.errorRate, achievedRps: elapsedSeconds > 0 ? total / elapsedSeconds : 0 },
+    bandwidth: { totalBytes, bytesSent: totalBytesSent, bytesReceived: totalBytesReceived, throughputKbps, throughputMbps },
     latencyMs: { avg, min: durations.length ? Math.min(...durations) : 0, max: durations.length ? Math.max(...durations) : 0, p50: globalPercentiles[50], p90: globalPercentiles[90], p95: metrics.p95, p99: metrics.p99 },
     byStatus,
     byEndpoint: endpointSummary,
@@ -1100,6 +1294,14 @@ async function doRequest(ep, timeoutMs, captureBody = false) {
     debug(`Request: ${ep.method} ${ep.url}`);
     if (ep.headers && Object.keys(ep.headers).length) debug(`Headers:`, ep.headers);
     if (ep.body) debug(`Body:`, typeof ep.body === 'string' ? ep.body.slice(0, 100) : ep.body);
+
+    let bytesSent = ep.method.length + ep.url.length + 16;
+    if (ep.body) bytesSent += Buffer.byteLength(typeof ep.body === 'string' ? ep.body : JSON.stringify(ep.body));
+    if (ep.headers) {
+      for (const [k, v] of Object.entries(ep.headers)) {
+        bytesSent += Buffer.byteLength(k) + Buffer.byteLength(String(v)) + 4;
+      }
+    }
     
     const res = await fetch(ep.url, { 
       method: ep.method, 
@@ -1110,16 +1312,23 @@ async function doRequest(ep, timeoutMs, captureBody = false) {
       keepalive: true  // Enable connection reuse
     });
     
-    // Capture response headers
+    // Capture response headers & size
     const headers = {};
+    let bytesReceived = 0;
+    const cl = res.headers.get('content-length');
+    if (cl && !isNaN(parseInt(cl, 10))) {
+      bytesReceived = parseInt(cl, 10);
+    }
     res.headers.forEach((value, key) => {
       headers[key] = value;
+      bytesReceived += key.length + value.length + 4;
     });
     
     // Only consume body when needed - for non-success responses, skip body reading if not capturing
     const text = captureBody ? await res.text().catch(() => '') : 
-                 (res.status >= 200 && res.status < 300) ? await res.arrayBuffer().then(() => '').catch(() => '') :
+                 (res.status >= 200 && res.status < 300) ? await res.arrayBuffer().then(buf => { if (!cl) bytesReceived += buf.byteLength; return ''; }).catch(() => '') :
                  '';
+    if (!cl && text) bytesReceived += Buffer.byteLength(text);
     
     const durationMs = performance.now() - start;
     debug(`Response: ${res.status} in ${durationMs.toFixed(2)}ms`);
@@ -1130,6 +1339,8 @@ async function doRequest(ep, timeoutMs, captureBody = false) {
       url: ep.url, 
       status: res.status, 
       durationMs, 
+      bytesSent,
+      bytesReceived,
       error: null, 
       timestamp: new Date().toISOString(), 
       body: text,
@@ -1152,6 +1363,8 @@ async function doRequest(ep, timeoutMs, captureBody = false) {
       url: ep.url, 
       status: 0, 
       durationMs, 
+      bytesSent: 0,
+      bytesReceived: 0,
       error: err?.name === 'AbortError' ? 'timeout' : String(err?.message || err), 
       timestamp: new Date().toISOString(), 
       body: '',
@@ -1612,35 +1825,69 @@ async function runTest(config) {
     const shouldLaunch = timeSinceLastLaunch >= targetInterval;
     
     if (shouldLaunch && active < stage.concurrency) {
-      let ep;
-      if (dataRows && dataRows.length > 0) {
-        const epTemplate = pickEndpoint(config.endpointTemplates || config.endpoints);
-        const row = config.dataMode === 'random'
-          ? dataRows[Math.floor(Math.random() * dataRows.length)]
-          : dataRows[dataRowIndex % dataRows.length];
-        dataRowIndex++;
-        const iterVars = { ...(config.variables || {}), data: row };
-        ep = normalizeEndpoint(epTemplate, 0, iterVars);
-      } else {
-        ep = pickEndpoint(config.endpoints);
-      }
       active++; launched++; requestCounter++;
       lastLaunch = now;
-      
-      // Use retry logic if configured
       const retryConfig = config.retry || { enabled: true, maxAttempts: 3 };
       const jitterMs = Number(config.jitterMs || config.jitter || 0);
 
-      const sendReq = async () => {
-        if (jitterMs > 0) {
-          await new Promise(r => setTimeout(r, Math.random() * jitterMs));
-        }
-        return doRequestWithRetry(ep, config.timeoutMs, retryConfig, false);
-      };
+      if (config.scenarios && config.scenarios.length > 0) {
+        const scenario = pickEndpoint(config.scenarios);
+        const sessionVars = { ...(config.variables || {}), sessionId: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2, 9) };
+        
+        const runScenario = async () => {
+          for (let sIdx = 0; sIdx < scenario.steps.length; sIdx++) {
+            const step = scenario.steps[sIdx];
+            const renderedStep = normalizeEndpoint(step, sIdx, sessionVars);
+            if (jitterMs > 0) {
+              await new Promise(r => setTimeout(r, Math.random() * jitterMs));
+            }
+            const res = await doRequestWithRetry(renderedStep, config.timeoutMs, retryConfig, Boolean(step.extract));
+            res.scenario = scenario.name;
+            results.push(res);
 
-      sendReq()
-        .then(r => results.push(r))
-        .finally(() => active--);
+            if (step.extract && res.body) {
+              let json;
+              try { json = JSON.parse(res.body); } catch {}
+              for (const [varName, pathStr] of Object.entries(step.extract)) {
+                const val = pathStr.startsWith('body.') ? getByPath(json, pathStr.slice(5)) : getByPath(json, pathStr);
+                if (val !== undefined) sessionVars[varName] = val;
+              }
+            }
+
+            if (res.error || (step.expectStatus && res.status !== step.expectStatus)) {
+              if (step.continueOnFailure !== true) break;
+            }
+          }
+        };
+
+        runScenario()
+          .catch(() => {})
+          .finally(() => active--);
+      } else {
+        let ep;
+        if (dataRows && dataRows.length > 0) {
+          const epTemplate = pickEndpoint(config.endpointTemplates || config.endpoints);
+          const row = config.dataMode === 'random'
+            ? dataRows[Math.floor(Math.random() * dataRows.length)]
+            : dataRows[dataRowIndex % dataRows.length];
+          dataRowIndex++;
+          const iterVars = { ...(config.variables || {}), data: row };
+          ep = normalizeEndpoint(epTemplate, 0, iterVars);
+        } else {
+          ep = pickEndpoint(config.endpoints);
+        }
+
+        const sendReq = async () => {
+          if (jitterMs > 0) {
+            await new Promise(r => setTimeout(r, Math.random() * jitterMs));
+          }
+          return doRequestWithRetry(ep, config.timeoutMs, retryConfig, false);
+        };
+
+        sendReq()
+          .then(r => results.push(r))
+          .finally(() => active--);
+      }
       
       // Prevent memory overflow - stream results for very long tests
       if (results.length > 50000 && results.length % 10000 === 0) {
@@ -1967,6 +2214,14 @@ function printSummary(summary) {
   console.log(`Avg latency:  ${chalk.magenta(summary.latencyMs.avg.toFixed(2) + 'ms')}`);
   console.log(`p95 latency:  ${chalk.magenta(summary.latencyMs.p95.toFixed(2) + 'ms')}`);
   console.log(`p99 latency:  ${chalk.magenta(summary.latencyMs.p99.toFixed(2) + 'ms')}`);
+  if (summary.bandwidth) {
+    const mbRecv = (summary.bandwidth.bytesReceived / (1024 * 1024)).toFixed(2);
+    const mbSent = (summary.bandwidth.bytesSent / (1024 * 1024)).toFixed(2);
+    const rate = summary.bandwidth.throughputMbps >= 1 
+      ? `${summary.bandwidth.throughputMbps.toFixed(2)} MB/s`
+      : `${summary.bandwidth.throughputKbps.toFixed(1)} KB/s`;
+    console.log(`Throughput:   ${chalk.cyan.bold(rate)} (${chalk.gray(mbRecv + ' MB in, ' + mbSent + ' MB out')})`);
+  }
   
   console.log(chalk.gray('\nStatus Distribution:'));
   for (const [status, count] of Object.entries(summary.byStatus)) {
@@ -2597,6 +2852,34 @@ async function main() {
     }
     return;
   }
+  if (command === 'export-k6') {
+    const file = args._[1] || args.config || args.file;
+    if (!file) throw new Error('export-k6 requires a config file: sll export-k6 <config.json>');
+    const content = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const k6Script = exportToK6(content);
+    if (args.out) {
+      ensureDirFor(args.out);
+      fs.writeFileSync(args.out, k6Script);
+      console.log(chalk.green(`✓ Exported k6 script to ${args.out}`));
+    } else {
+      console.log(k6Script);
+    }
+    return;
+  }
+  if (command === 'export-postman') {
+    const file = args._[1] || args.config || args.file;
+    if (!file) throw new Error('export-postman requires a config file: sll export-postman <config.json>');
+    const content = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const postmanJson = exportToPostman(content);
+    if (args.out) {
+      ensureDirFor(args.out);
+      fs.writeFileSync(args.out, postmanJson);
+      console.log(chalk.green(`✓ Exported Postman Collection to ${args.out}`));
+    } else {
+      console.log(postmanJson);
+    }
+    return;
+  }
   if (command === 'probe' || command === 'ping') {
     let ep;
     if (args.curl) {
@@ -2767,6 +3050,10 @@ export {
   parseCsvData,
   probeEndpoint,
   generateCiWorkflow,
-  parseHarRecording
+  parseHarRecording,
+  exportToK6,
+  exportToPostman,
+  resolveDynamicGenerator,
+  setHighCapacityMode
 };
 

@@ -663,6 +663,32 @@ app.post('/api/parse-csv', (req, res) => {
   }
 });
 
+// Export configuration to k6 script
+app.post('/api/export/k6', (req, res) => {
+  const { config } = req.body;
+  if (!config) return res.status(400).json({ error: 'Config object required' });
+  try {
+    if (!sll) return res.status(503).json({ error: 'Engine helper initializing' });
+    const script = sll.exportToK6(config);
+    res.json({ script });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Export configuration to Postman Collection
+app.post('/api/export/postman', (req, res) => {
+  const { config } = req.body;
+  if (!config) return res.status(400).json({ error: 'Config object required' });
+  try {
+    if (!sll) return res.status(503).json({ error: 'Engine helper initializing' });
+    const collectionJson = sll.exportToPostman(config);
+    res.json({ collection: JSON.parse(collectionJson) });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 // Delete report
 app.delete('/api/reports/:name', (req, res) => {
   const safeName = sanitizeName(req.params.name);
@@ -715,6 +741,17 @@ app.get('/metrics', (req, res) => {
       '# TYPE safeloadlab_last_test_error_rate gauge',
       `safeloadlab_last_test_error_rate ${(lastTestSummary.totals?.errorRate || 0).toFixed(4)}`
     );
+
+    if (lastTestSummary.bandwidth) {
+      lines.push(
+        '# HELP safeloadlab_last_test_bytes_total Total network bytes transferred in latest test',
+        '# TYPE safeloadlab_last_test_bytes_total counter',
+        `safeloadlab_last_test_bytes_total ${lastTestSummary.bandwidth.totalBytes || 0}`,
+        '# HELP safeloadlab_last_test_throughput_kbps Achieved network throughput in kilobytes per second',
+        '# TYPE safeloadlab_last_test_throughput_kbps gauge',
+        `safeloadlab_last_test_throughput_kbps ${(lastTestSummary.bandwidth.throughputKbps || 0).toFixed(2)}`
+      );
+    }
   }
 
   res.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');

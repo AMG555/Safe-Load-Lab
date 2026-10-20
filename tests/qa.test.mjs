@@ -19,7 +19,13 @@ import {
   parseCsvData,
   probeEndpoint,
   generateCiWorkflow,
-  parseHarRecording
+  parseHarRecording,
+  exportToK6,
+  exportToPostman,
+  renderTemplate,
+  resolveDynamicGenerator,
+  setHighCapacityMode,
+  runTest
 } from '../bin/safe-load-lab.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -589,6 +595,120 @@ test('QA CLI - bench command validates target URL', () => {
   assert.equal(res.status, 1);
   assert.match(res.stderr, /bench requires a target URL/);
 });
+
+// ─── 15. Dynamic Built-in Generators QA Tests ─────────────────────────
+
+test('QA Dynamic Generators - generates uuid, timestamp, and random values', () => {
+  const rendered = renderTemplate({
+    id: '{{$uuid}}',
+    time: '{{$timestamp}}',
+    iso: '{{$isoDate}}',
+    email: '{{$randomEmail}}',
+    num: '{{$randomInt:50:60}}',
+    str: '{{$randomAlpha:10}}',
+    ip: '{{$randomIp}}'
+  }, {});
+
+  assert.match(rendered.id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+  assert.ok(Number(rendered.time) > 1700000000000);
+  assert.match(rendered.iso, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+  assert.match(rendered.email, /^user_[a-z0-9]+@example\.com$/);
+  const n = parseInt(rendered.num, 10);
+  assert.ok(n >= 50 && n <= 60, `Number ${n} should be between 50 and 60`);
+  assert.equal(rendered.str.length, 10);
+  assert.match(rendered.ip, /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/);
+});
+
+// ─── 16. High-Capacity Limit Unlock QA Tests ──────────────────────────
+
+test('QA High Capacity - toggles unlocked limits with flag', () => {
+  const argsNormal = parseArgs(['--duration', '60']);
+  assert.equal(argsNormal['unlock-limits'], undefined);
+
+  const argsUnlocked = parseArgs(['--unlock-limits', '--duration', '1200', '--concurrency', '250', '--rps', '500']);
+  assert.equal(argsUnlocked['unlock-limits'], true);
+
+  const config = normalizeConfig({
+    ...argsUnlocked,
+    url: 'http://127.0.0.1:8080/fast',
+    duration: 1200,
+    concurrency: 250,
+    rps: 500
+  });
+
+  assert.equal(config.durationSeconds, 1200);
+  assert.equal(config.concurrency, 250);
+  assert.equal(config.rps, 500);
+
+  // Restore base limits
+  setHighCapacityMode(false);
+});
+
+// ─── 17. Bi-directional Script Exporters QA Tests ─────────────────────
+
+test('QA Exporter - exportToK6 generates valid executable k6 script', () => {
+  const sampleConfig = {
+    name: 'k6-test',
+    durationSeconds: 15,
+    concurrency: 8,
+    rps: 20,
+    thresholds: { p95Ms: 250, maxErrorRate: 0.02 },
+    endpoints: [
+      { name: 'get-users', method: 'GET', url: 'http://127.0.0.1:8080/items', headers: { Accept: 'application/json' } }
+    ]
+  };
+
+  const script = exportToK6(sampleConfig);
+  assert.match(script, /import http from 'k6\/http'/);
+  assert.match(script, /http_req_duration: \['p\(95\)<250'\]/);
+  assert.match(script, /http\.get\('http:\/\/127\.0\.0\.1:8080\/items'/);
+  assert.match(script, /check\(res1/);
+});
+
+test('QA Exporter - exportToPostman generates valid Postman v2.1 collection', () => {
+  const sampleConfig = {
+    name: 'my-postman-export',
+    endpoints: [
+      { name: 'create-item', method: 'POST', url: 'http://127.0.0.1:8080/items', body: '{"name":"test"}' }
+    ]
+  };
+
+  const jsonStr = exportToPostman(sampleConfig);
+  const collection = JSON.parse(jsonStr);
+  assert.ok(collection.info);
+  assert.equal(collection.info.name, 'my-postman-export');
+  assert.equal(collection.item.length, 1);
+  assert.equal(collection.item[0].request.method, 'POST');
+  assert.equal(collection.item[0].request.body.raw, '{"name":"test"}');
+});
+
+// ─── 18. Multi-Step User Journey Scenarios QA Tests ───────────────────
+
+test('QA Scenarios - normalizes multi-step user flows', () => {
+  const scenarioConfig = {
+    name: 'ecommerce-flow',
+    durationSeconds: 10,
+    concurrency: 2,
+    rps: 5,
+    scenarios: [
+      {
+        name: 'auth-and-fetch',
+        weight: 1,
+        steps: [
+          { name: 'login', method: 'POST', url: 'http://127.0.0.1:8080/auth', extract: { token: 'body.token' } },
+          { name: 'get-items', method: 'GET', url: 'http://127.0.0.1:8080/items', headers: { Authorization: 'Bearer {{token}}' } }
+        ]
+      }
+    ]
+  };
+
+  const norm = normalizeConfig(scenarioConfig);
+  assert.ok(norm.scenarios);
+  assert.equal(norm.scenarios.length, 1);
+  assert.equal(norm.scenarios[0].steps.length, 2);
+  assert.equal(norm.scenarios[0].steps[0].extract.token, 'body.token');
+});
+
 
 
 

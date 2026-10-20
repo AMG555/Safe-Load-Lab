@@ -214,6 +214,93 @@ sll import-har user-flow.har -o scenario.json
 sll import-har user-flow.har --include-assets -o scenario.json
 ```
 
+## Bi-Directional Script Exporters (k6 & Postman)
+
+Seamlessly migrate tests between Safe Load Lab and existing team toolchains:
+
+```bash
+# Export config to production-grade k6 JavaScript test script
+sll export-k6 load-test.json -o k6-test.js
+
+# Export config to Postman v2.1 Collection
+sll export-postman load-test.json -o postman-collection.json
+```
+
+Both export formats are also available directly via the Web UI Studio export modals.
+
+## Built-In Dynamic Data Generators
+
+Generate realistic, high-entropy test payloads on the fly without external CSV data files:
+
+- `{{$uuid}}` / `{{$guid}}` - Cryptographically strong UUID v4
+- `{{$timestamp}}` - Current epoch millisecond timestamp
+- `{{$isoDate}}` - ISO-8601 UTC timestamp (`YYYY-MM-DDTHH:mm:ss.sssZ`)
+- `{{$randomEmail}}` - Deterministic randomized test email
+- `{{$randomInt:min:max}}` - Random integer within specified bounds (e.g. `{{$randomInt:100:999}}`)
+- `{{$randomAlpha:length}}` - Alphanumeric random string (e.g. `{{$randomAlpha:16}}`)
+- `{{$randomIp}}` - Synthesized IPv4 address
+
+Usable anywhere across request URLs, custom headers, and JSON/text request bodies:
+
+```json
+{
+  "name": "create-user",
+  "method": "POST",
+  "url": "https://api.example.com/v1/users",
+  "headers": { "X-Request-ID": "{{$uuid}}" },
+  "body": {
+    "email": "{{$randomEmail}}",
+    "age": "{{$randomInt:18:65}}"
+  }
+}
+```
+
+## Multi-Step User Journey Scenarios
+
+Model realistic customer workflows with variable correlation and step dependencies:
+
+```json
+{
+  "name": "checkout-journey",
+  "durationSeconds": 60,
+  "concurrency": 10,
+  "rps": 20,
+  "scenarios": [
+    {
+      "name": "login-and-order",
+      "weight": 3,
+      "steps": [
+        {
+          "name": "authenticate",
+          "method": "POST",
+          "url": "https://api.example.com/auth/token",
+          "body": { "client_id": "app", "client_secret": "secret" },
+          "extract": { "authToken": "body.access_token" }
+        },
+        {
+          "name": "create-order",
+          "method": "POST",
+          "url": "https://api.example.com/orders",
+          "headers": { "Authorization": "Bearer {{authToken}}" },
+          "body": { "sku": "ITEM-{{$randomInt:1000:9999}}", "qty": 1 }
+        }
+      ]
+    }
+  ]
+}
+```
+
+## High-Capacity Limit Unlock
+
+For enterprise infrastructure stress testing on authorized hardware, bypass the default safety caps:
+
+```bash
+# Unlock up to 24-hour durations, 2,000 concurrency, and 10,000 requests/second
+sll run --config enterprise-stress.json --unlock-limits --i-own-this-target
+# Or alias
+sll run --config enterprise-stress.json --high-capacity --i-own-this-target
+```
+
 ## Prometheus & OpenMetrics Live Scraping
 
 Safe Load Lab Web Studio exposes an OpenMetrics Prometheus endpoint:
@@ -235,6 +322,8 @@ Metrics include:
 - `safeloadlab_last_test_rps`
 - `safeloadlab_last_test_p95_ms`
 - `safeloadlab_last_test_error_rate`
+- `safeloadlab_last_test_bytes_total`
+- `safeloadlab_last_test_throughput_kbps`
 
 ## Hermetic Local Mock Server
 
@@ -493,7 +582,7 @@ safe-load-lab/
 ├── docs/                   # Guides, benchmarks, and release notes
 ├── examples/               # Test configuration presets
 ├── schema/                 # JSON schema specifications
-├── tests/                  # 75 unit, integration, performance, & UI tests
+├── tests/                  # 105 unit, integration, performance, & UI tests
 ├── ui/                     # Web UI Studio & server
 ├── .github/                # GitHub Actions CI & workflows
 └── reports/                # Output artifacts (JSON, HTML, CSV, Markdown)
