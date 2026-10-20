@@ -204,6 +204,7 @@ Commands:
   run             Run a controlled load test
   probe, ping     Send single preflight probe to verify target status, latency, & assertions
   ci              Generate CI/CD pipeline workflow (GitHub Actions or GitLab CI)
+  ui, studio      Start Safe Load Lab Web UI Studio locally
   ab, diff        Run A/B differential load test comparing two endpoints or configs
   mock            Start hermetic local mock server for zero-flake load testing
   import-curl     Convert cURL command string to Safe Load Lab test config
@@ -2838,6 +2839,22 @@ async function main() {
     if (!file1 || !file2) throw new Error(`${command} requires two report files: sll ${command} <baseline.json> <current.json>`);
     const diffResult = compareReports(file1, file2, args);
     if (diffResult.isRegression) process.exitCode = 1;
+    return;
+  }
+  if (command === 'ui' || command === 'studio') {
+    const port = Number(args.port || process.env.PORT || 3001);
+    process.env.PORT = String(port);
+    const uiServerPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'ui', 'server.js');
+    const { default: app } = await import(pathToFileURL(uiServerPath).href);
+    const srv = app.listen(port, () => {
+      console.log(chalk.bold.green(`✓ Safe Load Lab Studio running on http://localhost:${port}`));
+      console.log(chalk.gray('  Interactive visual workspace for scenario builder, live telemetry, and exports.'));
+      console.log(chalk.gray('  Press Ctrl+C to stop.\n'));
+    });
+    process.on('SIGINT', () => {
+      console.log(chalk.yellow('\nStopping Studio server...'));
+      srv.close(() => process.exit(0));
+    });
     return;
   }
   if (command === 'mock') {

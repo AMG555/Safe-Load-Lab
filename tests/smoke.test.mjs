@@ -42,5 +42,6 @@ test('prints help with ab, mock, and import-curl commands', () => {
   assert.match(res.stdout, /ab, diff/);
   assert.match(res.stdout, /mock/);
   assert.match(res.stdout, /import-curl/);
+  assert.match(res.stdout, /ui, studio/);
 });
 
