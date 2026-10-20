@@ -27,6 +27,7 @@ import(pathToFileURL(CLI_PATH).href).then(m => { sll = m; }).catch(err => {
   console.error('Failed to import CLI helpers:', err.message);
 });
 
+let mockServerInstance = null;
 let mockProcess = null;
 let mockPort = 8080;
 let activeTestProcess = null;
@@ -56,7 +57,7 @@ app.get('/api/status', (req, res) => {
   res.json({
     activeTest: activeTestProcess !== null,
     testMeta: activeTestMeta,
-    mockRunning: mockProcess !== null,
+    mockRunning: mockServerInstance !== null || mockProcess !== null,
     mockPort,
     uptime: Math.round(process.uptime()),
     nodeVersion: process.version
@@ -173,7 +174,7 @@ app.post('/api/run', (req, res) => {
   const { config, reportName, mode = 'run' } = req.body;
   if (!config) return res.status(400).json({ error: 'Configuration is required' });
 
-  const safeMode = ['run', 'spike', 'soak', 'stress'].includes(mode) ? mode : 'run';
+  const safeMode = ['run', 'spike', 'soak', 'stress', 'capacity', 'break'].includes(mode) ? mode : 'run';
   const safeName = sanitizeName(reportName || `test-${new Date().toISOString().split('T')[0]}-${Date.now()}`);
   const reportPath = path.join(REPORTS_DIR, safeName);
   let tempPath = null;
@@ -225,10 +226,15 @@ app.post('/api/run', (req, res) => {
     proc.on('close', code => {
       cleanup();
       let summary = null;
+      let capacity = null;
       try {
         const report = JSON.parse(fs.readFileSync(`${reportPath}.json`, 'utf8'));
-        summary = report.summary;
-        if (summary) lastTestSummary = summary;
+        if (safeMode === 'capacity' || safeMode === 'break') {
+          capacity = report;
+        } else {
+          summary = report.summary;
+          if (summary) lastTestSummary = summary;
+        }
       } catch {}
 
       res.write(`data: ${JSON.stringify({
@@ -236,7 +242,8 @@ app.post('/api/run', (req, res) => {
         success: code === 0 || code === 2,
         exitCode: code,
         reportName: safeName,
-        summary
+        summary,
+        capacity
       })}\n\n`);
       res.end();
     });
@@ -367,12 +374,14 @@ app.post('/api/stop', (req, res) => {
 // Mock server management
 app.get('/api/mock/status', (req, res) => {
   res.json({
-    running: mockProcess !== null,
+    running: mockServerInstance !== null || mockProcess !== null,
     port: mockPort,
     endpoints: [
       `http://localhost:${mockPort}/health`,
       `http://localhost:${mockPort}/fast`,
       `http://localhost:${mockPort}/slow?delay=100`,
+      `http://localhost:${mockPort}/chaos?failRate=0.25&minDelay=20&maxDelay=150`,
+      `http://localhost:${mockPort}/slow-stream?chunks=5&delay=30`,
       `http://localhost:${mockPort}/error?status=500`,
       `http://localhost:${mockPort}/rate-limit?limit=10&window=5`,
       `http://localhost:${mockPort}/json`,
@@ -381,12 +390,69 @@ app.get('/api/mock/status', (req, res) => {
   });
 });
 
+// Dynamic mock routes
+app.get('/api/mock/routes', (req, res) => {
+  if (!mockServerInstance && !mockProcess) return res.json({ routes: [], mockRunning: false });
+  fetch(`http://127.0.0.1:${mockPort}/mock/routes`)
+    .then(r => r.json())
+    .then(data => {
+      const routes = data.routes || data;
+      res.json(routes);
+    })
+    .catch(err => res.json({ routes: [], error: err.message }));
+});
+
+app.post('/api/mock/routes', (req, res) => {
+  if (!mockServerInstance && !mockProcess) return res.status(400).json({ error: 'Mock server is not running' });
+  fetch(`http://127.0.0.1:${mockPort}/mock/routes`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req.body)
+  })
+    .then(r => r.json())
+    .then(data => res.json(data))
+    .catch(err => res.status(500).json({ error: err.message }));
+});
+
+app.delete('/api/mock/routes', (req, res) => {
+  if (!mockServerInstance && !mockProcess) return res.status(400).json({ error: 'Mock server is not running' });
+  fetch(`http://127.0.0.1:${mockPort}/mock/routes`, { method: 'DELETE' })
+    .then(r => r.json())
+    .then(data => res.json(data))
+    .catch(err => res.status(500).json({ error: err.message }));
+});
+
+// Waveform stages preview
+app.post('/api/waveform', (req, res) => {
+  const opts = req.body.options || req.body || {};
+  const waveform = req.body.waveform || opts.waveform || 'constant';
+  try {
+    if (!sll) return res.status(503).json({ error: 'Engine helper initializing' });
+    const stages = sll.generateTrafficProfile(waveform, opts);
+    res.json({ waveform, stages });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 app.post('/api/mock/start', (req, res) => {
-  if (mockProcess) {
+  if (mockServerInstance || mockProcess) {
     return res.json({ running: true, port: mockPort, message: 'Mock server already running' });
   }
 
   mockPort = req.body.port ? parseInt(req.body.port, 10) : 8080;
+  if (sll && sll.startMockServer) {
+    try {
+      mockServerInstance = sll.startMockServer(mockPort, '127.0.0.1');
+      mockServerInstance.on('error', () => {
+        mockServerInstance = null;
+      });
+      return res.json({ running: true, port: mockPort, message: `Mock server started on port ${mockPort}` });
+    } catch (e) {
+      return res.status(500).json({ error: e.message });
+    }
+  }
+
   mockProcess = spawn(process.execPath, [CLI_PATH, 'mock', '--port', String(mockPort)]);
 
   mockProcess.on('exit', () => {
@@ -395,10 +461,14 @@ app.post('/api/mock/start', (req, res) => {
 
   setTimeout(() => {
     res.json({ running: true, port: mockPort, message: `Mock server started on port ${mockPort}` });
-  }, 400);
+  }, 600);
 });
 
 app.post('/api/mock/stop', (req, res) => {
+  if (mockServerInstance) {
+    try { mockServerInstance.close(); } catch {}
+    mockServerInstance = null;
+  }
   if (mockProcess) {
     try {
       if (process.platform === 'win32') {
@@ -720,7 +790,7 @@ app.get('/metrics', (req, res) => {
     `safeloadlab_active_test ${activeTestProcess ? 1 : 0}`,
     '# HELP safeloadlab_mock_running Whether the hermetic mock server is running (1 or 0)',
     '# TYPE safeloadlab_mock_running gauge',
-    `safeloadlab_mock_running ${mockProcess ? 1 : 0}`
+    `safeloadlab_mock_running ${(mockServerInstance || mockProcess) ? 1 : 0}`
   ];
 
   if (lastTestSummary) {

@@ -202,6 +202,7 @@ Usage:
 Commands:
   bench, quick    Run quick zero-config benchmark on single endpoint
   run             Run a controlled load test
+  capacity, break Autonomous capacity discovery: step load until latency knee or breaking point
   probe, ping     Send single preflight probe to verify target status, latency, & assertions
   ci              Generate CI/CD pipeline workflow (GitHub Actions or GitLab CI)
   ui, studio      Start Safe Load Lab Web UI Studio locally
@@ -224,7 +225,7 @@ Commands:
   version         Show version
   help            Show help
 
-Required safety flag for run/bench/quick/ab/rate-limit/spike/soak/stress:
+Required safety flag for run/bench/quick/ab/capacity/rate-limit/spike/soak/stress:
   --i-own-this-target       Confirms you own or have explicit permission to test the target
 
 Common options:
@@ -234,6 +235,8 @@ Common options:
   --method <GET|POST|...>   HTTP method, default GET
   --body <json/string>      Request body for simple test
   --header "K: V"           Header, repeatable
+  --waveform <type>         Traffic shaping waveform: sine (diurnal), ladder (step ramp), burst (Poisson)
+  --sla <ms>                Target p95 latency SLA limit in ms for capacity discovery (default 200)
   --data <file>             CSV data feed file for parameterization ({{data.column}})
   --data-mode <mode>        Data selection: round-robin (default) or random
   --include-assets          Include static assets (css, images, fonts) when importing HAR
@@ -455,6 +458,172 @@ function resolveDynamicGenerator(key) {
   return null;
 }
 
+function computeLatencyDistribution(durations) {
+  const bucketDefs = [
+    { label: '<10ms', min: 0, max: 10 },
+    { label: '10-25ms', min: 10, max: 25 },
+    { label: '25-50ms', min: 25, max: 50 },
+    { label: '50-100ms', min: 50, max: 100 },
+    { label: '100-250ms', min: 100, max: 250 },
+    { label: '250-500ms', min: 250, max: 500 },
+    { label: '500ms-1s', min: 500, max: 1000 },
+    { label: '>1s', min: 1000, max: Infinity }
+  ];
+
+  if (!Array.isArray(durations) || durations.length === 0) {
+    const emptyAnomalies = [];
+    emptyAnomalies.tailDivergence = false;
+    emptyAnomalies.bimodal = false;
+    emptyAnomalies.tailRatio = 1;
+    return {
+      buckets: bucketDefs.map(b => ({ label: b.label, count: 0, percentage: 0, pct: 0 })),
+      anomalies: emptyAnomalies
+    };
+  }
+
+  const buckets = bucketDefs.map(b => ({ label: b.label, count: 0, percentage: 0, pct: 0 }));
+  for (const d of durations) {
+    if (!Number.isFinite(d)) continue;
+    for (let i = 0; i < bucketDefs.length; i++) {
+      if (d >= bucketDefs[i].min && d < bucketDefs[i].max) {
+        buckets[i].count++;
+        break;
+      }
+    }
+  }
+
+  const total = durations.length || 1;
+  for (const b of buckets) {
+    b.percentage = Number(((b.count / total) * 100).toFixed(1));
+    b.pct = b.percentage;
+  }
+
+  const anomalies = [];
+  const percentiles = calculatePercentiles(durations, [50, 90, 99]);
+  const tailRatio = percentiles[50] > 0 ? Number((percentiles[99] / percentiles[50]).toFixed(2)) : 1;
+  const isTailDivergent = percentiles[50] > 0 && tailRatio >= 3.5;
+
+  if (isTailDivergent) {
+    anomalies.push({
+      type: 'TAIL_DIVERGENCE',
+      severity: 'warning',
+      message: `High tail latency divergence (p99 ${percentiles[99].toFixed(1)}ms is ${tailRatio.toFixed(1)}x median ${percentiles[50].toFixed(1)}ms). Possible lock contention or GC pauses.`
+    });
+  }
+
+  const populated = buckets.map(b => b.count);
+  let peaks = 0;
+  for (let i = 1; i < populated.length - 1; i++) {
+    if (populated[i] > populated[i - 1] && populated[i] > populated[i + 1] && populated[i] >= total * 0.05) {
+      peaks++;
+    }
+  }
+  if (peaks < 2 && populated[0] >= total * 0.15 && (populated[4] + populated[5] + populated[6] >= total * 0.15) && (populated[2] + populated[3] <= total * 0.1)) {
+    peaks = 2;
+  }
+  const isBimodal = peaks >= 2;
+  if (isBimodal) {
+    anomalies.push({
+      type: 'BIMODAL_DISTRIBUTION',
+      severity: 'warning',
+      message: 'Bimodal/multimodal latency pattern detected. Indicates two distinct service paths, cold cache hits, or connection pool wait.'
+    });
+  }
+
+  anomalies.tailDivergence = isTailDivergent;
+  anomalies.bimodal = isBimodal;
+  anomalies.tailRatio = tailRatio;
+
+  return { buckets, anomalies };
+}
+
+function generateTrafficProfile(waveform, options = {}) {
+  const baseRps = Math.max(1, Number(options.baseRps || options.rps || 10));
+  const peakRps = Math.max(baseRps, Number(options.peakRps || baseRps * 4));
+  const duration = Math.max(2, Number(options.durationSeconds || options.duration || 60));
+  const concurrency = Math.max(1, Number(options.concurrency || 5));
+
+  const stages = [];
+  const wave = String(waveform || '').toLowerCase();
+
+  if (wave === 'sine' || wave === 'wave') {
+    const numStages = 6;
+    const stageDuration = Math.max(1, Math.floor(duration / numStages));
+    for (let i = 0; i < numStages; i++) {
+      const angle = (i / (numStages - 1)) * Math.PI;
+      const factor = Math.sin(angle);
+      const rps = Math.round(baseRps + factor * (peakRps - baseRps));
+      const c = Math.max(1, Math.round(concurrency * (rps / baseRps)));
+      const capRps = Math.min(rps, HARD_LIMITS.maxRps);
+      stages.push({
+        name: `sine-stage-${i + 1}`,
+        durationSeconds: stageDuration,
+        concurrency: Math.min(c, HARD_LIMITS.maxConcurrency),
+        rps: capRps,
+        targetRps: capRps
+      });
+    }
+  } else if (wave === 'ladder' || wave === 'step') {
+    const steps = [
+      { pct: 0.25, name: 'step-warmup' },
+      { pct: 0.50, name: 'step-low' },
+      { pct: 0.75, name: 'step-medium' },
+      { pct: 1.00, name: 'step-peak' },
+      { pct: 0.50, name: 'step-cooldown' }
+    ];
+    const stageDuration = Math.max(1, Math.floor(duration / steps.length));
+    for (const s of steps) {
+      const rps = Math.round(baseRps + s.pct * (peakRps - baseRps));
+      const c = Math.max(1, Math.round(concurrency * (rps / baseRps)));
+      const capRps = Math.min(rps, HARD_LIMITS.maxRps);
+      stages.push({
+        name: s.name,
+        durationSeconds: stageDuration,
+        concurrency: Math.min(c, HARD_LIMITS.maxConcurrency),
+        rps: capRps,
+        targetRps: capRps
+      });
+    }
+  } else if (wave === 'burst') {
+    const numCycles = 3;
+    const cycleDuration = Math.max(2, Math.floor(duration / numCycles));
+    const burstDuration = Math.max(1, Math.floor(cycleDuration * 0.25));
+    const baseDuration = Math.max(1, cycleDuration - burstDuration);
+
+    for (let i = 0; i < numCycles; i++) {
+      stages.push({
+        name: `steady-${i + 1}`,
+        durationSeconds: baseDuration,
+        concurrency: concurrency,
+        rps: baseRps,
+        targetRps: baseRps
+      });
+      const capPeak = Math.min(peakRps, HARD_LIMITS.maxRps);
+      stages.push({
+        name: `burst-${i + 1}`,
+        durationSeconds: burstDuration,
+        concurrency: Math.min(concurrency * 3, HARD_LIMITS.maxConcurrency),
+        rps: capPeak,
+        targetRps: capPeak
+      });
+    }
+  } else if (wave === 'constant' || !wave) {
+    stages.push({
+      name: 'constant-load',
+      durationSeconds: duration,
+      concurrency,
+      rps: baseRps,
+      targetRps: baseRps
+    });
+  } else {
+    throw new Error(`Unknown waveform '${waveform}'. Supported: constant, sine, ladder, burst`);
+  }
+
+  stages.waveform = wave || 'constant';
+  stages.stages = stages;
+  return stages;
+}
+
 function renderTemplate(value, vars) {
   if (typeof value === 'string') {
     return value.replace(/\{\{\s*([$\w.:-]+)\s*\}\}/g, (_, key) => {
@@ -532,6 +701,19 @@ function applyCliOverrides(config, args) {
   if (args.rps !== undefined) config.rps = args.rps;
   if (hasCliTimeout) config.timeoutMs = args.timeout;
   if (args.thresholds && !config.thresholds) config.thresholds = args.thresholds;
+
+  const waveform = args.waveform || config.waveform;
+  if (waveform) {
+    config.stages = generateTrafficProfile(waveform, {
+      ...config,
+      durationSeconds: args.duration || config.durationSeconds || 60,
+      concurrency: args.concurrency || config.concurrency || 5,
+      rps: args.rps || config.rps || 10,
+      baseRps: args['base-rps'] || config.baseRps,
+      peakRps: args['peak-rps'] || config.peakRps
+    });
+  }
+
   return config;
 }
 
@@ -886,6 +1068,7 @@ function exportToPostman(config) {
 function startMockServer(port = 8080, host = '127.0.0.1') {
   const requestHistory = new Map(); // ip -> [timestamps]
   const mockItems = [{ id: 1, name: 'Item 1' }, { id: 2, name: 'Item 2' }];
+  const customRoutes = new Map();
 
   const server = http.createServer((req, res) => {
     const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
@@ -1028,6 +1211,102 @@ function startMockServer(port = 8080, host = '127.0.0.1') {
         meta: { total: 2, version: '1.0' }
       }));
       return;
+    }
+
+    if (pathname === '/chaos') {
+      const failRate = parseFloat(parsedUrl.searchParams.get('failRate') || '0.25');
+      const minDelay = parseInt(parsedUrl.searchParams.get('minDelay') || '20', 10);
+      const maxDelay = parseInt(parsedUrl.searchParams.get('maxDelay') || '150', 10);
+      const status = parseInt(parsedUrl.searchParams.get('status') || '500', 10);
+      const delay = Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
+
+      setTimeout(() => {
+        if (Math.random() < failRate) {
+          res.writeHead(status, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Chaos Injected Failure', status, delayMs: delay }));
+        } else {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ok', route: 'chaos', delayMs: delay }));
+        }
+      }, delay);
+      return;
+    }
+
+    if (pathname === '/slow-stream') {
+      const chunks = parseInt(parsedUrl.searchParams.get('chunks') || '5', 10);
+      const delay = parseInt(parsedUrl.searchParams.get('delay') || '30', 10);
+      res.writeHead(200, {
+        'Content-Type': 'application/x-ndjson; charset=utf-8',
+        'Transfer-Encoding': 'chunked'
+      });
+      let chunkCount = 0;
+      const timer = setInterval(() => {
+        chunkCount++;
+        res.write(JSON.stringify({ chunk: chunkCount, total: chunks, time: Date.now() }) + '\n');
+        if (chunkCount >= chunks) {
+          clearInterval(timer);
+          res.end();
+        }
+      }, delay);
+      return;
+    }
+
+    if (pathname === '/mock/routes') {
+      if (req.method === 'GET') {
+        const routes = Array.from(customRoutes.entries()).map(([p, r]) => ({ path: p, ...r }));
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ routes, total: routes.length }));
+        return;
+      }
+      if (req.method === 'POST') {
+        let body = '';
+        req.on('data', chunk => { body += chunk; });
+        req.on('end', () => {
+          try {
+            const data = JSON.parse(body);
+            if (!data.path) {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'path is required' }));
+              return;
+            }
+            customRoutes.set(data.path, {
+              method: (data.method || 'GET').toUpperCase(),
+              status: data.status || 200,
+              headers: data.headers || { 'Content-Type': 'application/json' },
+              body: data.body !== undefined ? data.body : { ok: true }
+            });
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, status: 'created', path: data.path }));
+          } catch (e) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: e.message }));
+          }
+        });
+        return;
+      }
+      if (req.method === 'DELETE') {
+        const delPath = parsedUrl.searchParams.get('path');
+        if (delPath) {
+          customRoutes.delete(delPath);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true, status: 'deleted', path: delPath }));
+          return;
+        }
+        customRoutes.clear();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, status: 'cleared' }));
+        return;
+      }
+    }
+
+    if (customRoutes.has(pathname)) {
+      const cr = customRoutes.get(pathname);
+      if (!cr.method || cr.method === req.method) {
+        res.writeHead(cr.status, cr.headers || { 'Content-Type': 'application/json' });
+        const payload = typeof cr.body === 'string' ? cr.body : JSON.stringify(cr.body);
+        res.end(payload);
+        return;
+      }
     }
 
     // Default 404
@@ -1295,6 +1574,7 @@ function summarize(results, startedAt, finishedAt, config) {
     totals: { requests: total, failed, errorRate: metrics.errorRate, achievedRps: elapsedSeconds > 0 ? total / elapsedSeconds : 0 },
     bandwidth: { totalBytes, bytesSent: totalBytesSent, bytesReceived: totalBytesReceived, throughputKbps, throughputMbps },
     latencySparkline: generateSparkline(durations, 10),
+    latencyDistribution: computeLatencyDistribution(durations),
     latencyMs: { avg, min: durations.length ? Math.min(...durations) : 0, max: durations.length ? Math.max(...durations) : 0, p50: globalPercentiles[50], p90: globalPercentiles[90], p95: metrics.p95, p99: metrics.p99 },
     byStatus,
     byEndpoint: endpointSummary,
@@ -1960,19 +2240,298 @@ function htmlEscape(v) {
 
 function writeHtmlReport(filePath, summary, results) {
   ensureDirFor(filePath);
-  const statusRows = Object.entries(summary.byStatus).map(([k, v]) => `<tr><td>${htmlEscape(k)}</td><td>${v}</td></tr>`).join('');
-  const endpointRows = Object.entries(summary.byEndpoint).map(([name, e]) => `<tr><td>${htmlEscape(name)}</td><td>${e.total}</td><td>${e.failed}</td><td>${(e.errorRate*100).toFixed(2)}%</td><td>${e.avgMs.toFixed(2)}</td><td>${e.p95Ms.toFixed(2)}</td><td>${e.p99Ms.toFixed(2)}</td></tr>`).join('');
-  const thresholdRows = Object.entries(summary.thresholds || {}).map(([name, t]) => `<tr><td>${htmlEscape(name)}</td><td class="${t.pass ? 'pass' : 'fail'}">${t.pass ? 'PASS' : 'FAIL'}</td><td>${htmlEscape(t.actual)}</td><td>${htmlEscape(t.expected)}</td></tr>`).join('') || '<tr><td colspan="4">No thresholds configured</td></tr>';
-  const recentRows = results.slice(-100).reverse().map(r => `<tr><td>${htmlEscape(r.timestamp)}</td><td>${htmlEscape(r.endpoint)}</td><td>${r.status}</td><td>${r.durationMs.toFixed(2)}</td><td>${htmlEscape(r.error || '')}</td></tr>`).join('');
-  const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Safe Load Lab Report</title><style>
-    body{font-family:Inter,system-ui,Segoe UI,Arial,sans-serif;margin:0;background:#0f172a;color:#e5e7eb}main{max-width:1100px;margin:0 auto;padding:32px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px}.card{background:#111827;border:1px solid #334155;border-radius:14px;padding:18px;box-shadow:0 8px 24px #0004}.metric{font-size:28px;font-weight:800;color:#93c5fd}.label{color:#94a3b8;font-size:13px}table{width:100%;border-collapse:collapse;margin:16px 0;background:#111827;border-radius:12px;overflow:hidden}th,td{padding:10px 12px;border-bottom:1px solid #334155;text-align:left}th{background:#1e293b;color:#bfdbfe}.pass{color:#86efac;font-weight:800}.fail{color:#fca5a5;font-weight:800}h1,h2{color:white}.muted{color:#94a3b8}</style></head><body><main>
-    <h1>Safe Load Lab Report</h1><p class="muted">${htmlEscape(summary.testName)} | ${htmlEscape(summary.startedAt)} → ${htmlEscape(summary.finishedAt)}</p>
-    <section class="grid"><div class="card"><div class="metric">${summary.totals.requests}</div><div class="label">Requests</div></div><div class="card"><div class="metric">${summary.totals.failed}</div><div class="label">Failed</div></div><div class="card"><div class="metric">${(summary.totals.errorRate*100).toFixed(2)}%</div><div class="label">Error Rate</div></div><div class="card"><div class="metric">${summary.totals.achievedRps.toFixed(2)}</div><div class="label">Achieved RPS</div></div><div class="card"><div class="metric">${summary.latencyMs.p95.toFixed(1)}ms</div><div class="label">p95 Latency</div></div><div class="card"><div class="metric">${summary.latencyMs.p99.toFixed(1)}ms</div><div class="label">p99 Latency</div></div></section>
-    <h2>Thresholds</h2><table><thead><tr><th>Name</th><th>Result</th><th>Actual</th><th>Expected</th></tr></thead><tbody>${thresholdRows}</tbody></table>
-    <h2>Endpoints</h2><table><thead><tr><th>Endpoint</th><th>Total</th><th>Failed</th><th>Error Rate</th><th>Avg ms</th><th>p95 ms</th><th>p99 ms</th></tr></thead><tbody>${endpointRows}</tbody></table>
-    <h2>Status Codes</h2><table><thead><tr><th>Status</th><th>Count</th></tr></thead><tbody>${statusRows}</tbody></table>
-    <h2>Recent Requests</h2><table><thead><tr><th>Time</th><th>Endpoint</th><th>Status</th><th>Duration ms</th><th>Error</th></tr></thead><tbody>${recentRows}</tbody></table>
-    </main></body></html>`;
+
+  const statusRows = Object.entries(summary.byStatus || {}).map(([k, v]) => {
+    const code = parseInt(k, 10);
+    const cls = isNaN(code) ? 'badge-danger' : code >= 200 && code < 300 ? 'badge-success' : code >= 400 ? 'badge-danger' : 'badge-warning';
+    return `<tr><td><span class="badge ${cls}">${htmlEscape(k)}</span></td><td style="font-weight:700;">${v.toLocaleString()}</td></tr>`;
+  }).join('');
+
+  const endpointRows = Object.entries(summary.byEndpoint || {}).map(([name, e]) => `<tr>
+    <td style="font-weight:600;color:#38bdf8;">${htmlEscape(name)}</td>
+    <td>${e.total.toLocaleString()}</td>
+    <td>${e.failed}</td>
+    <td style="color:${e.errorRate > 0 ? '#ef4444' : '#10b981'};font-weight:700;">${(e.errorRate * 100).toFixed(2)}%</td>
+    <td>${e.avgMs.toFixed(1)}ms</td>
+    <td>${e.p95Ms.toFixed(1)}ms</td>
+    <td>${e.p99Ms.toFixed(1)}ms</td>
+  </tr>`).join('');
+
+  const thresholdRows = Object.entries(summary.thresholds || {}).map(([name, t]) => `<tr>
+    <td style="font-weight:600;">${htmlEscape(name)}</td>
+    <td><span class="badge ${t.pass ? 'badge-success' : 'badge-danger'}">${t.pass ? '✓ PASS' : '✗ FAIL'}</span></td>
+    <td style="font-family:monospace;">${htmlEscape(t.actual)}</td>
+    <td style="font-family:monospace;color:#94a3b8;">${htmlEscape(t.expected)}</td>
+  </tr>`).join('') || '<tr><td colspan="4" style="color:#64748b;">No SLA thresholds configured</td></tr>';
+
+  const recentRows = (results || []).slice(-100).reverse().map(r => {
+    const isErr = r.status >= 400 || r.status === 0 || r.error;
+    return `<tr>
+      <td style="font-family:monospace;font-size:12px;color:#94a3b8;">${htmlEscape((r.timestamp || '').slice(11, 23))}</td>
+      <td style="font-weight:600;color:#e2e8f0;">${htmlEscape(r.endpoint)}</td>
+      <td><span class="badge ${isErr ? 'badge-danger' : 'badge-success'}">${r.status || 'ERR'}</span></td>
+      <td style="font-family:monospace;">${r.durationMs ? r.durationMs.toFixed(1) + 'ms' : '0ms'}</td>
+      <td style="color:${isErr ? '#ef4444' : '#64748b'};font-size:12px;">${htmlEscape(r.error || 'None')}</td>
+    </tr>`;
+  }).join('');
+
+  // 1. Percentiles SVG Chart
+  const pMin = summary.latencyMs?.min || 0;
+  const p50 = summary.latencyMs?.p50 || 0;
+  const p90 = summary.latencyMs?.p90 || 0;
+  const p95 = summary.latencyMs?.p95 || 0;
+  const p99 = summary.latencyMs?.p99 || 0;
+  const pMax = summary.latencyMs?.max || Math.max(p99 * 1.2, 10);
+  const maxAxis = Math.max(pMax, 1);
+
+  const points = [
+    { label: 'Min', val: pMin, x: 40 },
+    { label: 'p50', val: p50, x: 110 },
+    { label: 'p90', val: p90, x: 190 },
+    { label: 'p95', val: p95, x: 270 },
+    { label: 'p99', val: p99, x: 350 },
+    { label: 'Max', val: pMax, x: 420 }
+  ];
+
+  const svgH = 150;
+  const svgTop = 25;
+  const svgBottom = 115;
+  const svgRange = svgBottom - svgTop;
+
+  const polyCoords = points.map(p => {
+    const y = svgBottom - Math.round((Math.min(p.val, maxAxis) / maxAxis) * svgRange);
+    return `${p.x},${y}`;
+  }).join(' ');
+
+  const percentileDots = points.map(p => {
+    const y = svgBottom - Math.round((Math.min(p.val, maxAxis) / maxAxis) * svgRange);
+    return `
+      <circle cx="${p.x}" cy="${y}" r="4" fill="#06b6d4" stroke="#090d16" stroke-width="2"/>
+      <text x="${p.x}" y="${y - 8}" text-anchor="middle" fill="#38bdf8" font-size="10" font-family="monospace">${p.val.toFixed(0)}ms</text>
+      <text x="${p.x}" y="${svgBottom + 16}" text-anchor="middle" fill="#94a3b8" font-size="10" font-family="sans-serif">${p.label}</text>
+    `;
+  }).join('');
+
+  const percentileSvg = `<svg viewBox="0 0 460 145" width="100%" height="145" xmlns="http://www.w3.org/2000/svg">
+    <line x1="30" y1="${svgBottom}" x2="435" y2="${svgBottom}" stroke="#334155" stroke-width="1"/>
+    <polyline fill="none" stroke="#06b6d4" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" points="${polyCoords}"/>
+    ${percentileDots}
+  </svg>`;
+
+  // 2. Latency Distribution SVG
+  const distBuckets = summary.latencyDistribution?.buckets || summary.distribution?.buckets || [];
+  let distBars = '';
+  if (distBuckets.length) {
+    const barW = 38;
+    const gap = 12;
+    const startX = 30;
+    const maxPct = Math.max(...distBuckets.map(b => Number(b.percentage ?? b.pct ?? 0)), 1);
+
+    distBars = distBuckets.map((b, i) => {
+      const x = startX + i * (barW + gap);
+      const pct = Number(b.percentage ?? b.pct ?? 0);
+      const h = Math.round((pct / maxPct) * 75);
+      const y = svgBottom - h;
+      return `
+        <rect x="${x}" y="${y}" width="${barW}" height="${h}" rx="3" fill="url(#cyanGrad)"/>
+        <text x="${x + barW / 2}" y="${y - 4}" text-anchor="middle" fill="#f8fafc" font-size="9" font-family="monospace">${pct}%</text>
+        <text x="${x + barW / 2}" y="${svgBottom + 14}" text-anchor="middle" fill="#94a3b8" font-size="8" font-family="sans-serif">${b.label}</text>
+      `;
+    }).join('');
+  }
+
+  const distributionSvg = `<svg viewBox="0 0 440 145" width="100%" height="145" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="cyanGrad" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#06b6d4"/>
+        <stop offset="100%" stop-color="#3b82f6"/>
+      </linearGradient>
+    </defs>
+    <line x1="20" y1="${svgBottom}" x2="430" y2="${svgBottom}" stroke="#334155" stroke-width="1"/>
+    ${distBars}
+  </svg>`;
+
+  // 3. Anomaly Warnings Box
+  const anomalies = summary.latencyDistribution?.anomalies || [];
+  let anomalyHtml = '';
+  if (anomalies.length) {
+    anomalyHtml = `<div class="alert-box alert-warn" style="margin-bottom:24px;">
+      <div style="font-weight:700;margin-bottom:6px;display:flex;align-items:center;gap:6px;">
+        <span>⚠️</span> <span>Performance Anomalies Detected:</span>
+      </div>
+      ${anomalies.map(a => `<div style="font-size:13px;margin-top:4px;">• <b>[${htmlEscape(a.type)}]</b> ${htmlEscape(a.message)}</div>`).join('')}
+    </div>`;
+  }
+
+  // 4. Bandwidth formatted
+  let throughputStr = 'N/A';
+  let totalDataStr = 'N/A';
+  if (summary.bandwidth) {
+    throughputStr = summary.bandwidth.throughputMbps >= 1 
+      ? `${summary.bandwidth.throughputMbps.toFixed(2)} MB/s`
+      : `${summary.bandwidth.throughputKbps.toFixed(1)} KB/s`;
+    const mb = (summary.bandwidth.totalBytes / (1024 * 1024)).toFixed(2);
+    totalDataStr = `${mb} MB`;
+  }
+
+  const html = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Safe Load Lab Report - ${htmlEscape(summary.testName)}</title>
+  <style>
+    :root {
+      --bg: #090d16;
+      --card-bg: #0f172a;
+      --subtle: #131c31;
+      --border: #1e293b;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --accent: #06b6d4;
+      --success: #10b981;
+      --warn: #f59e0b;
+      --danger: #ef4444;
+      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: var(--font); font-size: 14px; line-height: 1.5; padding: 32px 20px; }
+    main { max-width: 1200px; margin: 0 auto; }
+    .header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; border-bottom: 1px solid var(--border); padding-bottom: 20px; margin-bottom: 28px; }
+    .brand { display: flex; align-items: center; gap: 10px; font-size: 20px; font-weight: 800; color: var(--text); letter-spacing: -0.02em; }
+    .brand-badge { background: linear-gradient(135deg, #06b6d4, #3b82f6); width: 28px; height: 28px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 16px; }
+    .meta-tag { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); background: var(--subtle); padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border); }
+    .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 28px; }
+    .kpi-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; padding: 18px; }
+    .kpi-metric { font-size: 28px; font-weight: 800; color: #38bdf8; font-family: var(--font-mono); }
+    .kpi-label { font-size: 11px; text-transform: uppercase; font-weight: 600; color: var(--text-muted); margin-top: 4px; letter-spacing: 0.05em; }
+    .chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 28px; }
+    @media (max-width: 900px) { .chart-grid { grid-template-columns: 1fr; } }
+    .chart-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; padding: 18px; }
+    .chart-title { font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; }
+    .alert-box { padding: 14px 18px; border-radius: 8px; border-left: 4px solid; }
+    .alert-warn { background: rgba(245, 158, 11, 0.1); border-color: var(--warn); color: #fde68a; }
+    .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; margin-bottom: 28px; }
+    .card-header { padding: 14px 18px; background: var(--subtle); border-bottom: 1px solid var(--border); font-size: 14px; font-weight: 700; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 11px 16px; text-align: left; border-bottom: 1px solid var(--border); }
+    th { background: var(--subtle); color: var(--text-muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(255, 255, 255, 0.02); }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; font-family: var(--font-mono); }
+    .badge-success { background: rgba(16, 185, 129, 0.15); color: var(--success); }
+    .badge-warning { background: rgba(245, 158, 11, 0.15); color: var(--warn); }
+    .badge-danger { background: rgba(239, 68, 68, 0.15); color: var(--danger); }
+    @media print {
+      body { background: #fff !important; color: #000 !important; }
+      .kpi-card, .chart-card, .card { border-color: #cbd5e1 !important; background: #f8fafc !important; }
+      .kpi-metric { color: #0284c7 !important; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="header">
+      <div class="brand">
+        <div class="brand-badge">⚡</div>
+        <div>Safe Load Lab <span style="font-size:12px;color:var(--text-muted);font-weight:400;">Executive Performance Report</span></div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <span class="meta-tag">Test: ${htmlEscape(summary.testName)}</span>
+        <span class="meta-tag">Duration: ${(Number(summary.elapsedSeconds || summary.durationSeconds || summary.duration || 0)).toFixed(1)}s</span>
+        <span class="meta-tag">${htmlEscape((summary.startedAt || '').slice(0, 19).replace('T', ' '))}</span>
+      </div>
+    </div>
+
+    ${anomalyHtml}
+
+    <div class="kpi-grid">
+      <div class="kpi-card">
+        <div class="kpi-metric">${(summary.totals?.requests || 0).toLocaleString()}</div>
+        <div class="kpi-label">Total Requests</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-metric" style="color:${(summary.totals?.failed || 0) > 0 ? '#ef4444' : '#10b981'};">${(summary.totals?.failed || 0).toLocaleString()}</div>
+        <div class="kpi-label">Failed Requests</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-metric" style="color:${(summary.totals?.errorRate || 0) > 0 ? '#ef4444' : '#10b981'};">${((summary.totals?.errorRate || 0) * 100).toFixed(2)}%</div>
+        <div class="kpi-label">Error Rate</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-metric">${(summary.totals?.achievedRps || 0).toFixed(1)}</div>
+        <div class="kpi-label">Achieved RPS</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-metric">${(summary.latencyMs?.p95 || 0).toFixed(1)}ms</div>
+        <div class="kpi-label">p95 Latency</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-metric" style="font-size:24px;">${throughputStr}</div>
+        <div class="kpi-label">Throughput (${totalDataStr})</div>
+      </div>
+    </div>
+
+    <div class="chart-grid">
+      <div class="chart-card">
+        <div class="chart-title">
+          <span>📈 Latency Percentile Progression</span>
+          <span style="font-size:11px;color:var(--text-muted);font-family:var(--font-mono);">Avg: ${summary.latencyMs.avg.toFixed(1)}ms</span>
+        </div>
+        ${percentileSvg}
+      </div>
+      <div class="chart-card">
+        <div class="chart-title">
+          <span>📊 Latency HDR Histogram Distribution</span>
+          <span style="font-size:11px;color:var(--text-muted);font-family:var(--font-mono);">p99: ${summary.latencyMs.p99.toFixed(1)}ms</span>
+        </div>
+        ${distributionSvg}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">🎯 SLA Threshold Scorecard</div>
+      <table>
+        <thead><tr><th>Threshold Name</th><th>Status</th><th>Actual Value</th><th>Target SLA</th></tr></thead>
+        <tbody>${thresholdRows}</tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <div class="card-header">🌐 Target Endpoints Performance</div>
+      <table>
+        <thead><tr><th>Endpoint</th><th>Requests</th><th>Failed</th><th>Error Rate</th><th>Avg Latency</th><th>p95 Latency</th><th>p99 Latency</th></tr></thead>
+        <tbody>${endpointRows}</tbody>
+      </table>
+    </div>
+
+    <div style="display:grid;grid-template-columns:300px 1fr;gap:20px;margin-bottom:28px;">
+      <div class="card" style="margin-bottom:0;">
+        <div class="card-header">🔢 Status Codes</div>
+        <table>
+          <thead><tr><th>Code</th><th>Count</th></tr></thead>
+          <tbody>${statusRows}</tbody>
+        </table>
+      </div>
+      <div class="card" style="margin-bottom:0;">
+        <div class="card-header">⏱️ Recent Requests Audit (Last 100)</div>
+        <div style="max-height:260px;overflow-y:auto;">
+          <table>
+            <thead><tr><th>Time</th><th>Endpoint</th><th>Status</th><th>Duration</th><th>Error</th></tr></thead>
+            <tbody>${recentRows}</tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <footer style="text-align:center;color:var(--text-muted);font-size:12px;margin-top:20px;">
+      Safe Load Lab Performance Engineering Suite • Confidential Benchmark
+    </footer>
+  </main>
+</body>
+</html>`;
+
   fs.writeFileSync(filePath, html);
 }
 
@@ -2245,6 +2804,25 @@ function printSummary(summary) {
       ? `${summary.bandwidth.throughputMbps.toFixed(2)} MB/s`
       : `${summary.bandwidth.throughputKbps.toFixed(1)} KB/s`;
     console.log(`Throughput:   ${chalk.cyan.bold(rate)} (${chalk.gray(mbRecv + ' MB in, ' + mbSent + ' MB out')})`);
+  }
+
+  if (summary.latencyDistribution?.buckets?.length) {
+    const populated = summary.latencyDistribution.buckets.filter(b => b.count > 0);
+    if (populated.length) {
+      console.log(chalk.gray('\nLatency Buckets:'));
+      for (const b of populated) {
+        const barLen = Math.max(1, Math.round(b.percentage / 4));
+        const bar = '■'.repeat(barLen);
+        console.log(`  ${b.label.padEnd(10)} ${chalk.cyan(bar)} ${b.percentage}% (${b.count})`);
+      }
+    }
+  }
+
+  if (summary.latencyDistribution?.anomalies?.length) {
+    console.log(chalk.bold.yellow('\n⚠️  Latency Anomalies:'));
+    for (const a of summary.latencyDistribution.anomalies) {
+      console.log(chalk.yellow(`  • [${a.type}] ${a.message}`));
+    }
   }
   
   console.log(chalk.gray('\nStatus Distribution:'));
@@ -2818,6 +3396,293 @@ async function runAbTest(args) {
   return { diff, runA, runB };
 }
 
+async function runCapacityTest(args) {
+  if (!args.url && !args.config && !args.curl) {
+    throw new Error('capacity requires --url <url>, --config <file>, or --curl "<command>"');
+  }
+
+  const slaMs = Number(args.sla || args['sla-ms'] || args.targetSla || 200);
+  const maxErrorRate = Number(args['max-error'] || args['max-error-rate'] || args.maxFailureRate || 0.01);
+  const stepDuration = Number(args['step-duration'] || args.stepDuration || 5);
+  const startRps = Math.max(5, Number(args['start-rps'] || args.startRps || 10));
+  const maxCapRps = Math.min(Number(args['max-rps'] || args.maxRps || 200), HARD_LIMITS.maxRps);
+  const stepIncrement = Number(args['step-increment'] || args.stepIncrement || 0);
+  const concurrencyRatio = Number(args['concurrency-ratio'] || args.concurrencyRatio || 0.5);
+
+  console.log(chalk.bold.cyan('\n============================================================'));
+  console.log(chalk.bold.cyan('     ⚡ SAFE LOAD LAB — AUTONOMOUS CAPACITY DISCOVERY       '));
+  console.log(chalk.bold.cyan('============================================================\n'));
+  console.log(`Target:           ${chalk.white(args.url || args.config || 'Target Endpoint')}`);
+  console.log(`SLA Limit (p95):  ${chalk.yellow(slaMs + 'ms')}`);
+  console.log(`Max Error Rate:   ${chalk.yellow((maxErrorRate * 100).toFixed(1) + '%')}`);
+  console.log(`Step Duration:    ${chalk.white(stepDuration + 's per probe')}`);
+  console.log(`Probe Range:      ${chalk.white(startRps + ' RPS → ' + maxCapRps + ' RPS')}\n`);
+
+  const rpsSteps = [];
+  let curr = startRps;
+  while (curr <= maxCapRps) {
+    rpsSteps.push(curr);
+    if (stepIncrement > 0) curr += stepIncrement;
+    else if (curr < 25) curr += 15;
+    else if (curr < 100) curr += 25;
+    else curr += 50;
+  }
+  if (!rpsSteps.includes(maxCapRps)) rpsSteps.push(maxCapRps);
+
+  const matrix = [];
+  let sweetSpotRps = 0;
+  let kneeRps = null;
+  let breakingRps = null;
+  let stopReason = null;
+  let prevP95 = 0;
+  let baseSlope = null;
+
+  for (let i = 0; i < rpsSteps.length; i++) {
+    const targetRps = rpsSteps[i];
+    const targetConcurrency = Math.max(2, Math.min(Math.ceil(targetRps * concurrencyRatio), HARD_LIMITS.maxConcurrency));
+
+    console.log(chalk.bold.blue(`▶ Step ${i + 1}/${rpsSteps.length}: Probing ${targetRps} RPS (concurrency: ${targetConcurrency}) ...`));
+
+    const stepConfig = normalizeConfig({
+      ...args,
+      duration: stepDuration,
+      concurrency: targetConcurrency,
+      rps: targetRps,
+      thresholds: {}
+    });
+
+    const { summary } = await runTest(stepConfig);
+
+    const achievedRps = summary.totals.achievedRps;
+    const errorRate = summary.totals.errorRate;
+    const avgMs = summary.latencyMs.avg;
+    const p95Ms = summary.latencyMs.p95;
+    const p99Ms = summary.latencyMs.p99;
+    const failed = summary.totals.failed;
+    const total = summary.totals.requests;
+
+    let slope = 0;
+    if (i > 0 && achievedRps > matrix[i - 1].achievedRps) {
+      slope = (p95Ms - matrix[i - 1].p95Ms) / (achievedRps - matrix[i - 1].achievedRps);
+      if (baseSlope === null && slope > 0) baseSlope = slope;
+    }
+
+    const stepRecord = {
+      step: i + 1,
+      targetRps,
+      concurrency: targetConcurrency,
+      achievedRps: Number(achievedRps.toFixed(1)),
+      total,
+      failed,
+      errorRate: Number((errorRate * 100).toFixed(2)),
+      avgMs: Number(avgMs.toFixed(1)),
+      p95Ms: Number(p95Ms.toFixed(1)),
+      p99Ms: Number(p99Ms.toFixed(1)),
+      slope: Number(slope.toFixed(2)),
+      status: 'OK'
+    };
+
+    const errorBreached = errorRate > maxErrorRate;
+    const slaBreached = p95Ms > slaMs;
+    const severeBreach = p95Ms > slaMs * 2.5;
+
+    if (!kneeRps && baseSlope !== null && slope > baseSlope * 2.5 && p95Ms > prevP95 * 1.5) {
+      kneeRps = targetRps;
+      stepRecord.status = 'KNEE';
+    }
+
+    if (!errorBreached && !slaBreached) {
+      sweetSpotRps = targetRps;
+    }
+
+    if (errorBreached || severeBreach) {
+      breakingRps = targetRps;
+      stepRecord.status = errorBreached ? 'ERRORS' : 'SATURATED';
+      stopReason = errorBreached
+        ? `Error rate ${(errorRate * 100).toFixed(1)}% exceeded allowed limit of ${(maxErrorRate * 100).toFixed(1)}%`
+        : `p95 Latency ${p95Ms.toFixed(1)}ms exceeded severe threshold (2.5x SLA)`;
+      matrix.push(stepRecord);
+      break;
+    }
+
+    if (slaBreached) {
+      stepRecord.status = 'DEGRADED';
+    }
+
+    matrix.push(stepRecord);
+    prevP95 = p95Ms;
+  }
+
+  console.log(chalk.bold('\n📊 Capacity Discovery Matrix'));
+  console.log(chalk.gray('─'.repeat(75)));
+  console.log(
+    'Step'.padEnd(6) +
+    'Target RPS'.padEnd(12) +
+    'Achieved'.padEnd(11) +
+    'p95 Latency'.padEnd(14) +
+    'Error Rate'.padEnd(13) +
+    'Status'.padEnd(10)
+  );
+  console.log(chalk.gray('─'.repeat(75)));
+
+  for (const m of matrix) {
+    const statusColor = m.status === 'OK' ? chalk.green :
+                        m.status === 'KNEE' ? chalk.cyan :
+                        m.status === 'DEGRADED' ? chalk.yellow : chalk.red;
+    console.log(
+      `#${m.step}`.padEnd(6) +
+      `${m.targetRps}`.padEnd(12) +
+      `${m.achievedRps}`.padEnd(11) +
+      `${m.p95Ms}ms`.padEnd(14) +
+      `${m.errorRate}%`.padEnd(13) +
+      statusColor.bold(m.status)
+    );
+  }
+  console.log(chalk.gray('─'.repeat(75)));
+
+  const recProductionRps = Math.max(sweetSpotRps, matrix[0]?.achievedRps || 0);
+  const recommendation = `Target safely handles up to ${recProductionRps} RPS with p95 < ${slaMs}ms. Sizing recommendation: set production autoscaling threshold to ${Math.round(recProductionRps * 0.8)} RPS (80% headroom).`;
+
+  console.log(chalk.bold.green('\n🎯 Capacity Findings & Production Sizing:'));
+  console.log(`  • ${chalk.bold('Sweet Spot (Max Sustainable)')}: ${chalk.green.bold(sweetSpotRps + ' RPS')}`);
+  if (kneeRps) {
+    console.log(`  • ${chalk.bold('Queueing Knee Point')}:           ${chalk.yellow.bold(kneeRps + ' RPS')} (latency growth accelerates)`);
+  }
+  if (breakingRps) {
+    console.log(`  • ${chalk.bold('Breaking Point')}:                ${chalk.red.bold(breakingRps + ' RPS')} (${stopReason})`);
+  }
+  console.log(`  • ${chalk.bold('Recommendation')}:                ${chalk.white(recommendation)}\n`);
+
+  const safeHeadroom = Math.round(recProductionRps * 0.8);
+
+  return {
+    target: args.url || args.config || 'target',
+    slaMs,
+    targetSlaMs: slaMs,
+    maxErrorRate,
+    sweetSpotRps,
+    safeHeadroomRps: safeHeadroom,
+    saturationKneeRps: kneeRps,
+    breakingPointRps: breakingRps,
+    kneeRps,
+    breakingRps,
+    stopReason,
+    reason: stopReason || 'Completed within SLA threshold',
+    recommendation,
+    matrix,
+    steps: matrix,
+    timestamp: new Date().toISOString()
+  };
+}
+
+function generateCapacityMarkdownReport(cap) {
+  return `# ⚡ Safe Load Lab — Capacity Discovery Report
+
+**Target**: ${cap.target}  
+**Date**: ${cap.timestamp}  
+**SLA Target (p95)**: ${cap.slaMs}ms  
+**Allowed Error Rate**: ${(cap.maxErrorRate * 100).toFixed(1)}%  
+
+## Executive Sizing Recommendation
+> **${cap.recommendation}**
+
+- **Optimal Sustainable Load (Sweet Spot)**: **${cap.sweetSpotRps} RPS**
+${cap.kneeRps ? `- **Queueing Inflection / Knee Point**: **${cap.kneeRps} RPS**\n` : ''}${cap.breakingRps ? `- **Breaking / Saturation Point**: **${cap.breakingRps} RPS** (${cap.stopReason})\n` : ''}
+## Capacity Step Matrix
+
+| Step | Target RPS | Concurrency | Achieved RPS | Avg Latency | p95 Latency | p99 Latency | Error Rate | Status |
+|------|------------|-------------|--------------|-------------|-------------|-------------|------------|--------|
+${cap.matrix.map(m => `| #${m.step} | ${m.targetRps} | ${m.concurrency} | ${m.achievedRps} | ${m.avgMs}ms | ${m.p95Ms}ms | ${m.p99Ms}ms | ${m.errorRate}% | **${m.status}** |`).join('\n')}
+
+---
+*Generated by Safe Load Lab Autonomous Capacity Engine*
+`;
+}
+
+function writeCapacityHtmlReport(filePath, cap) {
+  ensureDirFor(filePath);
+  const rows = cap.matrix.map(m => {
+    const cls = m.status === 'OK' ? 'pass' : m.status === 'DEGRADED' || m.status === 'KNEE' ? 'warn' : 'fail';
+    return `<tr>
+      <td>#${m.step}</td>
+      <td>${m.targetRps}</td>
+      <td>${m.concurrency}</td>
+      <td>${m.achievedRps}</td>
+      <td>${m.avgMs}ms</td>
+      <td>${m.p95Ms}ms</td>
+      <td>${m.p99Ms}ms</td>
+      <td>${m.errorRate}%</td>
+      <td><span class="badge ${cls}">${m.status}</span></td>
+    </tr>`;
+  }).join('');
+
+  const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Capacity Discovery - Safe Load Lab</title><style>
+    body{font-family:Inter,-apple-system,sans-serif;margin:0;background:#090d16;color:#f8fafc}
+    main{max-width:1100px;margin:0 auto;padding:32px 20px}
+    .header{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #1e293b;padding-bottom:16px;margin-bottom:24px}
+    .brand{font-size:20px;font-weight:800;color:#06b6d4}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;margin-bottom:24px}
+    .card{background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:20px}
+    .metric{font-size:32px;font-weight:800;color:#38bdf8}
+    .label{font-size:12px;color:#94a3b8;text-transform:uppercase;margin-top:4px}
+    .alert-box{background:rgba(6,182,212,0.1);border-left:4px solid #06b6d4;padding:16px;border-radius:6px;margin-bottom:24px;font-size:15px;line-height:1.5}
+    table{width:100%;border-collapse:collapse;background:#0f172a;border-radius:10px;overflow:hidden;border:1px solid #1e293b}
+    th,td{padding:12px 14px;border-bottom:1px solid #1e293b;text-align:left;font-size:13px}
+    th{background:#131c31;color:#94a3b8;font-size:11px;text-transform:uppercase}
+    .badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700}
+    .pass{background:rgba(16,185,129,0.15);color:#10b981}
+    .warn{background:rgba(245,158,11,0.15);color:#f59e0b}
+    .fail{background:rgba(239,68,68,0.15);color:#ef4444}
+  </style></head><body><main>
+    <div class="header">
+      <div class="brand">⚡ Safe Load Lab — Capacity Discovery</div>
+      <div style="font-family:monospace;color:#94a3b8;">${htmlEscape(cap.target)}</div>
+    </div>
+    <div class="alert-box">
+      <strong>🎯 Production Sizing Recommendation:</strong><br>${htmlEscape(cap.recommendation)}
+    </div>
+    <div class="grid">
+      <div class="card"><div class="metric">${cap.sweetSpotRps} RPS</div><div class="label">Sweet Spot (Max Sustainable)</div></div>
+      <div class="card"><div class="metric">${cap.kneeRps ? cap.kneeRps + ' RPS' : 'None'}</div><div class="label">Knee / Queueing Inflection</div></div>
+      <div class="card"><div class="metric" style="color:${cap.breakingRps ? '#ef4444' : '#10b981'};">${cap.breakingRps ? cap.breakingRps + ' RPS' : 'None'}</div><div class="label">Breaking Point</div></div>
+      <div class="card"><div class="metric">${cap.slaMs}ms</div><div class="label">SLA Target (p95)</div></div>
+    </div>
+    <h2>Step-by-Step Probe Matrix</h2>
+    <table>
+      <thead>
+        <tr><th>Step</th><th>Target RPS</th><th>Concurrency</th><th>Achieved RPS</th><th>Avg Latency</th><th>p95 Latency</th><th>p99 Latency</th><th>Error Rate</th><th>Status</th></tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </main></body></html>`;
+  fs.writeFileSync(filePath, html);
+}
+
+async function saveCapacityReports(args, cap) {
+  const defaultOut = `reports/capacity-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+  const out = args.out || defaultOut;
+  ensureDirFor(out);
+  fs.writeFileSync(out, JSON.stringify(cap, null, 2));
+  console.log(chalk.green(`✓ Capacity JSON report saved: ${out}`));
+
+  if (args.html) {
+    writeCapacityHtmlReport(args.html, cap);
+    console.log(chalk.green(`✓ Capacity HTML report saved: ${args.html}`));
+  }
+  if (args.markdown || args.md) {
+    const mdPath = args.markdown || args.md;
+    ensureDirFor(mdPath);
+    fs.writeFileSync(mdPath, generateCapacityMarkdownReport(cap));
+    console.log(chalk.green(`✓ Capacity Markdown report saved: ${mdPath}`));
+  }
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    try {
+      const summaryMd = generateCapacityMarkdownReport(cap);
+      fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, '\n' + summaryMd + '\n');
+    } catch (_) {}
+  }
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   
@@ -3020,6 +3885,11 @@ async function main() {
     return;
   }
   if (command === 'rate-limit') { await runRateLimitCheck(args); return; }
+  if (command === 'capacity' || command === 'break') {
+    const capacityResult = await runCapacityTest(args);
+    await saveCapacityReports(args, capacityResult);
+    return;
+  }
   if (command === 'spike') {
     const { summary, results } = await runSpikeTest(args);
     printSummary(summary);
@@ -3144,6 +4014,13 @@ export {
   resolveDynamicGenerator,
   setHighCapacityMode,
   compareReports,
-  generateSparkline
+  generateSparkline,
+  computeLatencyDistribution,
+  generateTrafficProfile,
+  runCapacityTest,
+  generateCapacityMarkdownReport,
+  writeCapacityHtmlReport,
+  saveCapacityReports,
+  writeHtmlReport
 };
 

@@ -2,35 +2,44 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js 18+](https://img.shields.io/badge/node-%3E%3D18-green.svg)](https://nodejs.org/)
-[![Version](https://img.shields.io/badge/version-2.2.0-blue.svg)](https://github.com/AMG555/Safe-Load-Lab/releases)
+[![Version](https://img.shields.io/badge/version-2.3.0-blue.svg)](https://github.com/AMG555/Safe-Load-Lab/releases)
 [![CI](https://github.com/AMG555/Safe-Load-Lab/actions/workflows/safe-load-lab.yml/badge.svg)](https://github.com/AMG555/Safe-Load-Lab/actions/workflows/safe-load-lab.yml)
+[![Tests: 119 Passing](https://img.shields.io/badge/tests-119%20passing-brightgreen.svg)](https://github.com/AMG555/Safe-Load-Lab)
 
-A production-ready, feature-rich CLI for **controlled load testing**, **A/B differential benchmarking**, and **performance regression detection** of applications you own or have explicit permission to test.
+A production-ready, feature-rich CLI for **controlled load testing**, **autonomous capacity discovery**, **A/B differential benchmarking**, and **performance regression detection** of applications you own or have explicit permission to test.
 
 This is **not** a DDoS tool. It is designed for safe capacity, performance, rate-limit, auth-flow, GraphQL, and resilience testing with built-in safety limits and ethical use guidelines.
 
-## 🚀 What's New in v2.2.0
+## 🚀 What's New in v2.3.0
 
-- ⚖️ **A/B Differential Load Testing (`sll ab`)**: Compare two endpoints or environments side-by-side with statistical latency delta, RPS comparison, automated winner determination, and performance regression gates for CI/CD.
-- 🧪 **Hermetic Mock Server (`sll mock`)**: Built-in zero-dependency HTTP mock server (`/health`, `/fast`, `/slow`, `/error`, `/rate-limit`, `/echo`, `/json`) for 100% flake-free local testing and CI benchmarks.
-- ⚡ **cURL Import (`sll import-curl` & `--curl`)**: Convert any browser/Postman cURL command directly into a reproducible load test.
-- 🛡️ **75 Automated Quality Tests**: 100% passing test coverage across Unit, Integration, Performance, Smoke, A/B, UI Server, and QA suites.
-- ⚙️ **Modern Node 22 Support**: Updated GitHub Actions CI with npm caching, automated mock server startup, and artifact generation.
+- ⚡ **Autonomous Capacity Discovery (`sll capacity` / `sll break`)**: Automated stepped-ladder ramp algorithm finds breaking points, saturation knee, sweet spot RPS, and computes recommended 80% safe headroom for autoscaling sizing.
+- 🌊 **Traffic Shaping Waveforms**: Shape realistic traffic profiles using `sine` (sinusoidal diurnal wave), `ladder` (stepped with cooldown), `burst` (periodic spikes on baseline), or `constant`.
+- 📊 **HDR Latency Histograms & Statistical Anomaly Detection**: 8 logarithmic latency buckets with automated detection of tail divergence ($p_{95}/p_{50} \ge 3.5$) and bimodal distributions.
+- 💥 **Chaos Engineering & Dynamic Mock Routes**: Hermetic mock server extended with `/chaos` (configurable failure rate & delay jitter), `/slow-stream` (chunked streaming), and runtime `/mock/routes` CRUD API.
+- 📑 **Zero-Dependency Executive HTML Reports**: Self-contained dark-mode report with embedded pure-SVG percentile progression curves and HDR histogram charts.
+- 🎨 **Visual Multi-Step Scenario Journey Flow Builder**: Interactive visual step sequence editor in Studio UI with response variable extraction and assertion chaining.
+- 🛡️ **119 Automated Quality Tests**: 100% passing test coverage across Unit, Integration, Performance, Smoke, A/B, UI Server, and QA suites.
 
 ## 🎯 Why Safe Load Lab?
 
-- **Zero-Friction Sandbox** - Built-in mock server means you can start testing immediately without spinning up target servers
+- **Zero-Friction Sandbox** - Built-in mock server with chaos injection means instant testing without external dependencies
+- **Autonomous Capacity Sizing** - Discovers maximum sustainable RPS and safe autoscaling headroom automatically
 - **A/B Regression Gate** - Catch latency degradation in PRs before shipping to production
 - **cURL Native** - Copy request as cURL from Chrome DevTools and run a load test in seconds
 - **Production-Ready** - Used by developers and QA engineers for controlled load testing
-- **Feature-Rich** - Spike, soak, stress, A/B tests, webhooks, Slack alerts, assertions, and retries
+- **Feature-Rich** - Capacity, spike, soak, stress, A/B tests, webhooks, Slack alerts, assertions, and retries
 - **Safe by Design** - Hard-coded safety limits prevent accidental abuse
-- **Developer-Friendly** - Beautiful colored CLI, JSON configs, HTML/Markdown reports, and Web UI
+- **Developer-Friendly** - Beautiful colored CLI, JSON configs, standalone SVG HTML reports, and Web UI
 
 ## Features
 
+- ✅ **Autonomous Capacity Discovery** - Automated breaking point detection and production sizing
+- ✅ **Traffic Shaping Waveforms** - Sinusoidal diurnal waves, stepped ladders, and periodic bursts
+- ✅ **HDR Latency Histogram & Anomalies** - 8 logarithmic buckets with tail divergence and bimodal detection
 - ✅ **A/B Differential Testing** - Automated side-by-side endpoint comparison with regression alerts
-- ✅ **Hermetic Mock Server** - Zero-dependency local test server for reliable benchmarking
+- ✅ **Hermetic Mock Server & Chaos** - Zero-dependency local test server with `/chaos`, `/slow-stream`, and dynamic routes
+- ✅ **Executive HTML Reports** - Zero-dependency dark-mode reports with embedded SVG charts
+- ✅ **Visual Scenario Journey Flow** - Multi-step request chaining with JSONPath variable extraction
 - ✅ **cURL Command Import** - Run tests directly from cURL commands
 - ✅ **Controlled Load Testing** - Configurable concurrency, RPS, and duration with hard safety limits
 - ✅ **Staged Testing** - Warm-up, steady-state, and cool-down phases
@@ -45,7 +54,7 @@ This is **not** a DDoS tool. It is designed for safe capacity, performance, rate
 - ✅ **Webhook Integration** - Send results to custom webhooks
 - ✅ **Slack Notifications** - Real-time test results in Slack
 - ✅ **Multiple Report Formats** - JSON, CSV, HTML, Markdown, and JUnit XML reports
-- ✅ **Interactive Web UI** - Modern dashboard for visual test management
+- ✅ **Interactive Web UI Studio** - Modern dashboard for visual test management and dynamic routes
 - ✅ **Docker Support** - Containerized testing environment
 - ✅ **CI/CD Ready** - Hermetic CI workflow with exit codes suitable for automation
 
@@ -124,12 +133,13 @@ sll plan --config examples/advanced.json --env local
 
 | Command | Description |
 |---------|-------------|
+| `capacity`, `break` | Autonomous breaking point discovery with 80% safe headroom production sizing |
 | `bench`, `quick` | Run instant zero-config micro-benchmark on single endpoint |
 | `run` | Run a controlled load test |
 | `probe`, `ping` | Send a single preflight probe request to verify endpoint status, latency, and assertions |
 | `ci` | Generate ready-to-use CI/CD workflow (`github` or `gitlab`) |
 | `ab`, `diff` | Run differential A/B benchmark comparing two endpoints or config profiles |
-| `mock` | Start local hermetic mock server for zero-flake load tests |
+| `mock` | Start local hermetic mock server with `/chaos`, `/slow-stream`, and dynamic routes |
 | `import-curl` | Convert cURL command string to Safe Load Lab test config |
 | `import-postman` | Convert Postman Collection JSON to Safe Load Lab test config |
 | `import-openapi` | Convert OpenAPI 3.0 / Swagger 2.0 specification to Safe Load Lab test config |
@@ -144,6 +154,66 @@ sll plan --config examples/advanced.json --env local
 | `compare` | Compare two test reports side-by-side |
 | `version` | Show version |
 | `help` | Show help |
+
+## ⚡ Autonomous Capacity Discovery & Breaking Point Engine
+
+Find the exact inflection knee and breaking point of your service without manual guesswork:
+
+```bash
+# Autonomous capacity test against endpoint with SLA threshold
+sll capacity http://localhost:8080/fast \
+  --sla 200 \
+  --max-rps 100 \
+  --step-duration 5 \
+  --step-inc 10 \
+  --i-own-this-target
+```
+
+**Key Outputs**:
+- **Sweet Spot (Max Sustainable RPS)**: Maximum RPS meeting SLA (e.g. $p_{95} \le 200\text{ms}$) and error rate $\le 1.0\%$.
+- **Breaking Point**: First rate where latency explodes or error rate breaches thresholds.
+- **Saturation Knee**: First inflection where system begins queuing and achieved RPS diverges from target RPS.
+- **Production Sizing Recommendation**: Mathematically calculated autoscaling threshold with 80% safe headroom.
+- **Executive Reports**: Generates detailed Markdown table and standalone dark-mode HTML report (`capacity-discovery-<timestamp>.html`).
+
+## 🌊 Traffic Shaping Waveforms
+
+Shape traffic distributions dynamically instead of flat RPS profiles:
+
+```json
+{
+  "name": "diurnal-load",
+  "waveform": "sine",
+  "waveformOptions": {
+    "minRps": 10,
+    "maxRps": 80,
+    "duration": 60,
+    "cycles": 2
+  }
+}
+```
+
+Supported waveforms:
+- `constant`: Uniform target RPS rate.
+- `sine`: Diurnal traffic curve oscillating between `minRps` and `maxRps`.
+- `ladder`: Stepped progressive stair-climb with automatic cool-down valleys.
+- `burst`: Sustained baseline rate with periodic high-intensity bursts.
+
+## 💥 Chaos Engineering & Dynamic Mock Server
+
+Zero-flake hermetic mock server with built-in chaos and runtime programmable routes:
+
+```bash
+# Start hermetic mock server
+sll mock --port 8080
+```
+
+- **Chaos Endpoint**: `/chaos?failRate=0.3&minDelay=100&maxDelay=500` - simulates jitter and intermittent HTTP 500/503 failures.
+- **Slow Streaming Endpoint**: `/slow-stream?chunks=5&delay=50` - emits chunked HTTP transfer-encoding stream.
+- **Dynamic In-Memory Route Registration**:
+  - `POST /mock/routes` with `{ "path": "/api/v2/items", "status": 201, "body": { "created": true } }`
+  - `GET /mock/routes` - lists registered dynamic routes
+  - `DELETE /mock/routes?path=/api/v2/items` - unregisters mock route
 
 ## Preflight Single-Request Probe
 
@@ -603,7 +673,7 @@ safe-load-lab/
 ├── docs/                   # Guides, benchmarks, and release notes
 ├── examples/               # Test configuration presets
 ├── schema/                 # JSON schema specifications
-├── tests/                  # 108 unit, integration, performance, & UI tests
+├── tests/                  # 119 unit, integration, performance, & UI tests
 ├── ui/                     # Web UI Studio & server
 ├── .github/                # GitHub Actions CI & workflows
 └── reports/                # Output artifacts (JSON, HTML, CSV, Markdown)

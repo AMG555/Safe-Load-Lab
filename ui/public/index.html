@@ -642,20 +642,86 @@
               <label>Execution Mode</label>
               <select id="runMode" onchange="onModeChange()">
                 <option value="run">Standard Load Test (Controlled Concurrency & RPS)</option>
+                <option value="capacity">Autonomous Capacity Discovery (Breaking Point & Saturation)</option>
                 <option value="spike">Spike Test (Baseline → Sudden Spike → Recovery)</option>
                 <option value="soak">Soak Test (Sustained Load over Time)</option>
                 <option value="stress">Stress Test (Gradual Capacity Ramp-up)</option>
               </select>
             </div>
 
-            <div class="form-group">
-              <label>Target URL *</label>
-              <input type="url" id="targetUrl" placeholder="http://127.0.0.1:8080/fast" value="http://127.0.0.1:8080/fast">
-              <div style="display:flex;gap:6px;margin-top:6px;">
-                <button type="button" class="btn btn-secondary btn-sm" onclick="setTargetUrl('http://127.0.0.1:8080/fast')">Fast (Mock)</button>
-                <button type="button" class="btn btn-secondary btn-sm" onclick="setTargetUrl('http://127.0.0.1:8080/slow?delay=80')">Slow 80ms (Mock)</button>
-                <button type="button" class="btn btn-secondary btn-sm" onclick="setTargetUrl('http://127.0.0.1:8080/rate-limit?limit=15&window=5')">Rate Limit (Mock)</button>
+            <!-- Traffic Shaping Waveform Selection -->
+            <div class="form-group" id="waveformGroup">
+              <label>Traffic Shaping Waveform</label>
+              <select id="trafficWaveform">
+                <option value="constant">Constant Load (Steady State)</option>
+                <option value="sine">Diurnal Sine Wave (Oscillating Peak & Trough)</option>
+                <option value="ladder">Step-Ladder Ramp (Incremental Stages)</option>
+                <option value="burst">Spike Burst Waves (Periodic Load Surges)</option>
+              </select>
+            </div>
+
+            <!-- Autonomous Capacity Discovery Settings (shown only for capacity mode) -->
+            <div id="capacityOptionsBox" style="display:none;background:var(--bg-subtle);border:1px solid var(--accent);border-radius:6px;padding:12px;margin-bottom:16px;">
+              <div style="font-weight:700;color:var(--accent);font-size:12px;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.04em;display:flex;align-items:center;gap:6px;">
+                <span>🎯</span> Capacity Discovery Parameters
               </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label>Target SLA Latency (ms)</label>
+                  <input type="number" id="capTargetSla" value="250" min="10" max="5000">
+                </div>
+                <div class="form-group">
+                  <label>Max Ceiling RPS</label>
+                  <input type="number" id="capMaxRps" value="200" min="5" max="1000">
+                </div>
+              </div>
+              <div class="form-row-3">
+                <div class="form-group">
+                  <label>Step Duration (s)</label>
+                  <input type="number" id="capStepDuration" value="4" min="2" max="60">
+                </div>
+                <div class="form-group">
+                  <label>Step Increment RPS</label>
+                  <input type="number" id="capStepIncrement" value="10" min="1" max="100">
+                </div>
+                <div class="form-group">
+                  <label>Max Error Rate (%)</label>
+                  <input type="number" id="capMaxErrorRate" value="5" min="0" max="100">
+                </div>
+              </div>
+            </div>
+
+            <!-- Workflow Architecture: Single Endpoint vs Multi-Step Journey Scenario -->
+            <div class="form-group">
+              <label>Workflow Architecture</label>
+              <div style="display:flex;gap:6px;">
+                <button type="button" class="btn btn-primary btn-sm" id="btnModeSingle" style="flex:1;" onclick="setWorkflowMode('single')">Single Endpoint</button>
+                <button type="button" class="btn btn-secondary btn-sm" id="btnModeScenario" style="flex:1;" onclick="setWorkflowMode('scenario')">Multi-Step Journey Flow</button>
+              </div>
+            </div>
+
+            <!-- Single Endpoint Controls -->
+            <div id="singleEndpointSection">
+              <div class="form-group">
+                <label>Target URL *</label>
+                <input type="url" id="targetUrl" placeholder="http://127.0.0.1:8080/fast" value="http://127.0.0.1:8080/fast">
+                <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;">
+                  <button type="button" class="btn btn-secondary btn-sm" onclick="setTargetUrl('http://127.0.0.1:8080/fast')">Fast (Mock)</button>
+                  <button type="button" class="btn btn-secondary btn-sm" onclick="setTargetUrl('http://127.0.0.1:8080/slow?delay=80')">Slow 80ms</button>
+                  <button type="button" class="btn btn-secondary btn-sm" onclick="setTargetUrl('http://127.0.0.1:8080/rate-limit?limit=15&window=5')">Rate Limit</button>
+                  <button type="button" class="btn btn-secondary btn-sm" onclick="setTargetUrl('http://127.0.0.1:8080/chaos?failRate=0.25&minDelay=20&maxDelay=120')">Chaos Mock</button>
+                  <button type="button" class="btn btn-secondary btn-sm" onclick="setTargetUrl('http://127.0.0.1:8080/slow-stream?chunks=10&chunkDelay=10')">Slow Stream</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Multi-Step Journey Scenario Builder Controls -->
+            <div id="scenarioBuilderSection" style="display:none;background:var(--bg-subtle);border:1px solid var(--border-default);border-radius:6px;padding:12px;margin-bottom:16px;">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+                <span style="font-weight:700;color:var(--text-main);font-size:12px;text-transform:uppercase;letter-spacing:0.04em;">User Journey Steps</span>
+                <button type="button" class="btn btn-secondary btn-sm" onclick="addScenarioStep()">+ Add Step</button>
+              </div>
+              <div id="scenarioStepsContainer" style="display:flex;flex-direction:column;gap:10px;"></div>
             </div>
 
             <div class="form-row-4">
@@ -863,6 +929,68 @@
               <div style="height:200px;position:relative;">
                 <canvas id="latencyChart"></canvas>
               </div>
+            </div>
+
+            <!-- Autonomous Capacity Discovery Results Card -->
+            <div id="capacityResultsSection" style="display:none;margin-bottom:16px;background:var(--bg-canvas);border:1px solid var(--accent);border-radius:6px;overflow:hidden;">
+              <div style="padding:10px 14px;background:rgba(6,182,212,0.12);display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border-default);">
+                <span style="font-weight:700;color:var(--accent);font-size:13px;display:flex;align-items:center;gap:6px;">
+                  <span>🎯</span> Autonomous Capacity & Breaking Point Analysis
+                </span>
+                <span id="capStatusBadge" class="badge badge-success">Evaluated</span>
+              </div>
+              <div style="padding:14px;">
+                <div class="stats-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:12px;">
+                  <div class="stat-card">
+                    <div class="stat-label">Breaking Point</div>
+                    <div class="stat-val danger" id="capBreakingPointRps">—</div>
+                  </div>
+                  <div class="stat-card">
+                    <div class="stat-label">Saturation Knee</div>
+                    <div class="stat-val warning" id="capKneeRps">—</div>
+                  </div>
+                  <div class="stat-card">
+                    <div class="stat-label">Safe Headroom</div>
+                    <div class="stat-val success" id="capSafeHeadroomRps">—</div>
+                  </div>
+                  <div class="stat-card">
+                    <div class="stat-label">Target SLA</div>
+                    <div class="stat-val" id="capSlaMs">—</div>
+                  </div>
+                </div>
+                <div id="capReasonText" style="font-size:12px;color:var(--text-muted);margin-bottom:10px;padding:6px 10px;background:var(--bg-subtle);border-radius:4px;font-family:var(--font-mono);"></div>
+                <div style="overflow-x:auto;">
+                  <table class="data-table" id="capStepsTable">
+                    <thead>
+                      <tr>
+                        <th>Target RPS</th>
+                        <th>Achieved RPS</th>
+                        <th>p95 Latency</th>
+                        <th>Error Rate</th>
+                        <th>SLA / Verdict</th>
+                      </tr>
+                    </thead>
+                    <tbody id="capStepsTableBody"></tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            <!-- Latency Anomaly Alert Card -->
+            <div id="anomalyAlertSection" style="display:none;margin-bottom:16px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.4);border-radius:6px;padding:12px 14px;">
+              <div style="display:flex;align-items:center;gap:8px;font-weight:700;color:var(--warning);font-size:13px;margin-bottom:6px;">
+                <span>⚠️</span> Statistical Latency Anomalies Detected
+              </div>
+              <div id="anomalyList" style="display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--text-main);"></div>
+            </div>
+
+            <!-- HDR Latency Distribution Card -->
+            <div id="latencyDistSection" style="display:none;margin-bottom:16px;background:var(--bg-canvas);border:1px solid var(--border-default);border-radius:6px;padding:14px;">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+                <span style="font-size:12px;font-weight:600;color:var(--text-dim);text-transform:uppercase;">HDR Latency Histogram Distribution</span>
+                <span id="distSummaryBadge" class="badge badge-neutral" style="font-family:var(--font-mono);font-size:11px;">8 Buckets</span>
+              </div>
+              <div id="latencyDistBars" style="display:flex;flex-direction:column;gap:6px;"></div>
             </div>
 
             <!-- Failure & Error Breakdown Card -->
@@ -1397,8 +1525,89 @@
       }
     }
 
+    let currentWorkflowMode = 'single';
+    let scenarioSteps = [
+      { name: 'Get Catalog', method: 'GET', url: 'http://127.0.0.1:8080/fast', body: '', extract: '', assertion: 'status == 200' },
+      { name: 'Simulate Processing', method: 'GET', url: 'http://127.0.0.1:8080/slow?delay=40', body: '', extract: '', assertion: 'status == 200' }
+    ];
+
+    function setWorkflowMode(mode) {
+      currentWorkflowMode = mode;
+      document.getElementById('btnModeSingle').className = mode === 'single' ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm';
+      document.getElementById('btnModeScenario').className = mode === 'scenario' ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm';
+      document.getElementById('singleEndpointSection').style.display = mode === 'single' ? 'block' : 'none';
+      document.getElementById('scenarioBuilderSection').style.display = mode === 'scenario' ? 'block' : 'none';
+      if (mode === 'scenario') renderScenarioSteps();
+    }
+
+    function addScenarioStep() {
+      scenarioSteps.push({
+        name: `Step ${scenarioSteps.length + 1}`,
+        method: 'GET',
+        url: 'http://127.0.0.1:8080/fast',
+        body: '',
+        extract: '',
+        assertion: 'status == 200'
+      });
+      renderScenarioSteps();
+    }
+
+    function removeScenarioStep(index) {
+      if (scenarioSteps.length <= 1) {
+        alert('At least one scenario step is required.');
+        return;
+      }
+      scenarioSteps.splice(index, 1);
+      renderScenarioSteps();
+    }
+
+    function updateScenarioStep(index, field, value) {
+      if (scenarioSteps[index]) {
+        scenarioSteps[index][field] = value;
+      }
+    }
+
+    function renderScenarioSteps() {
+      const container = document.getElementById('scenarioStepsContainer');
+      if (!container) return;
+      container.innerHTML = scenarioSteps.map((step, idx) => `
+        <div style="background:var(--bg-canvas);border:1px solid var(--border-default);border-radius:6px;padding:10px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+            <div style="display:flex;align-items:center;gap:6px;">
+              <span class="badge badge-neutral" style="font-size:10px;">Step ${idx + 1}</span>
+              <input type="text" value="${step.name || ''}" placeholder="Step Name" style="width:160px;padding:3px 6px;font-size:12px;font-weight:600;" onchange="updateScenarioStep(${idx}, 'name', this.value)">
+            </div>
+            <button type="button" class="btn btn-danger btn-sm" style="padding:2px 6px;font-size:11px;" onclick="removeScenarioStep(${idx})">✕ Remove</button>
+          </div>
+          <div style="display:flex;gap:6px;margin-bottom:6px;">
+            <select style="width:90px;padding:4px 6px;font-size:12px;" onchange="updateScenarioStep(${idx}, 'method', this.value)">
+              <option value="GET" ${step.method === 'GET' ? 'selected' : ''}>GET</option>
+              <option value="POST" ${step.method === 'POST' ? 'selected' : ''}>POST</option>
+              <option value="PUT" ${step.method === 'PUT' ? 'selected' : ''}>PUT</option>
+              <option value="DELETE" ${step.method === 'DELETE' ? 'selected' : ''}>DELETE</option>
+            </select>
+            <input type="url" value="${step.url || ''}" placeholder="http://127.0.0.1:8080/path" style="flex:1;padding:4px 8px;font-size:12px;" onchange="updateScenarioStep(${idx}, 'url', this.value)">
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+            <div>
+              <label style="font-size:10px;margin-bottom:2px;">Extract Variable</label>
+              <input type="text" value="${step.extract || ''}" placeholder="token=body.token" style="padding:3px 6px;font-size:11px;font-family:var(--font-mono);" onchange="updateScenarioStep(${idx}, 'extract', this.value)">
+            </div>
+            <div>
+              <label style="font-size:10px;margin-bottom:2px;">Assertion Check</label>
+              <input type="text" value="${step.assertion || ''}" placeholder="status == 200" style="padding:3px 6px;font-size:11px;font-family:var(--font-mono);" onchange="updateScenarioStep(${idx}, 'assertion', this.value)">
+            </div>
+          </div>
+        </div>
+      `).join('');
+    }
+
     function onModeChange() {
       const mode = document.getElementById('runMode').value;
+      const capBox = document.getElementById('capacityOptionsBox');
+      if (capBox) {
+        capBox.style.display = mode === 'capacity' ? 'block' : 'none';
+      }
       if (mode === 'spike') {
         document.getElementById('targetDuration').value = 120;
       } else if (mode === 'soak') {
@@ -1420,16 +1629,22 @@
         }
       }
 
-      const url = document.getElementById('targetUrl').value.trim();
-      const method = document.getElementById('targetMethod').value;
+      const mode = document.getElementById('runMode').value;
+      const waveform = document.getElementById('trafficWaveform')?.value || 'constant';
       const duration = parseInt(document.getElementById('targetDuration').value, 10);
       const concurrency = parseInt(document.getElementById('targetConcurrency').value, 10);
       const rps = parseInt(document.getElementById('targetRps').value, 10);
       const jitterMs = parseInt(document.getElementById('targetJitter').value, 10) || 0;
 
-      if (!url) {
-        alert('Please enter a Target URL');
-        return null;
+      let capacityOptions = undefined;
+      if (mode === 'capacity') {
+        capacityOptions = {
+          targetSla: parseInt(document.getElementById('capTargetSla')?.value, 10) || 250,
+          maxRps: parseInt(document.getElementById('capMaxRps')?.value, 10) || 200,
+          stepDuration: parseInt(document.getElementById('capStepDuration')?.value, 10) || 4,
+          stepIncrement: parseInt(document.getElementById('capStepIncrement')?.value, 10) || 10,
+          maxFailureRate: parseFloat(document.getElementById('capMaxErrorRate')?.value) || 5
+        };
       }
 
       // Collect custom headers
@@ -1455,6 +1670,56 @@
         if (k && v) headers[k] = v;
       }
 
+      if (currentWorkflowMode === 'scenario') {
+        if (!scenarioSteps || !scenarioSteps.length) {
+          alert('Please add at least one scenario step.');
+          return null;
+        }
+        const endpoints = scenarioSteps.map((s, idx) => {
+          const ep = {
+            name: s.name || `step_${idx + 1}`,
+            url: s.url || 'http://127.0.0.1:8080/fast',
+            method: s.method || 'GET',
+            headers: { ...headers },
+            weight: 1
+          };
+          if (['POST', 'PUT', 'PATCH'].includes(ep.method) && s.body) {
+            ep.body = s.body;
+            if (!ep.headers['Content-Type']) ep.headers['Content-Type'] = 'application/json';
+          }
+          if (s.extract) {
+            const parts = s.extract.split('=');
+            if (parts.length === 2) {
+              ep.extract = { [parts[0].trim()]: parts[1].trim() };
+            }
+          }
+          if (s.assertion) {
+            ep.assertions = [{ expression: s.assertion.trim() }];
+          }
+          return ep;
+        });
+
+        return {
+          name: `scenario-test-${duration}s`,
+          durationSeconds: duration,
+          concurrency,
+          rps,
+          jitterMs,
+          trafficWaveform: waveform,
+          capacityOptions,
+          timeoutMs: 10000,
+          endpoints,
+          data: parsedCsvRows && parsedCsvRows.length ? parsedCsvRows : undefined
+        };
+      }
+
+      const url = document.getElementById('targetUrl').value.trim();
+      const method = document.getElementById('targetMethod').value;
+      if (!url) {
+        alert('Please enter a Target URL');
+        return null;
+      }
+
       // Collect body
       let body = null;
       if (['POST', 'PUT', 'PATCH'].includes(method)) {
@@ -1471,6 +1736,8 @@
         concurrency,
         rps,
         jitterMs,
+        trafficWaveform: waveform,
+        capacityOptions,
         timeoutMs: 10000,
         endpoints: [
           { name: "endpoint", url, method, headers, body, weight: 1 }
@@ -1632,6 +1899,9 @@
         if (curr < 90) fill.style.width = (curr + 5) + '%';
       } else if (data.type === 'complete') {
         document.getElementById('execProgressFill').style.width = '100%';
+        if (data.capacity) {
+          renderCapacityResults(data.capacity);
+        }
         if (data.summary) {
           renderTestMetrics(data.summary);
         }
@@ -1661,6 +1931,92 @@
           appendConsole(`\n[ABORT] ${res.message}\n`);
           onTestFinished();
         });
+    }
+
+    function renderCapacityResults(cap) {
+      if (!cap) return;
+      const section = document.getElementById('capacityResultsSection');
+      if (!section) return;
+      section.style.display = 'block';
+
+      document.getElementById('capBreakingPointRps').textContent = cap.breakingPointRps ? `${cap.breakingPointRps} RPS` : 'Not Reached';
+      document.getElementById('capKneeRps').textContent = cap.saturationKneeRps ? `${cap.saturationKneeRps} RPS` : '—';
+      document.getElementById('capSafeHeadroomRps').textContent = cap.safeHeadroomRps ? `${cap.safeHeadroomRps} RPS` : '—';
+      document.getElementById('capSlaMs').textContent = cap.targetSlaMs ? `${cap.targetSlaMs}ms` : '—';
+      document.getElementById('capReasonText').textContent = `Termination: ${cap.reason || 'Completed'}`;
+
+      const tbody = document.getElementById('capStepsTableBody');
+      if (tbody && cap.steps && cap.steps.length) {
+        tbody.innerHTML = cap.steps.map(s => {
+          const isPassed = s.passed;
+          const statusBadge = isPassed 
+            ? '<span class="badge badge-success">PASS</span>' 
+            : '<span class="badge badge-danger">FAIL / VIOLATION</span>';
+          return `
+            <tr>
+              <td><strong>${s.targetRps} RPS</strong></td>
+              <td>${(s.achievedRps || 0).toFixed(1)} RPS</td>
+              <td style="color:${s.p95 > (cap.targetSlaMs || 250) ? 'var(--danger)' : 'var(--text-main)'};">${(s.p95 || 0).toFixed(1)}ms</td>
+              <td style="color:${s.errorRate > 0 ? 'var(--danger)' : 'var(--success)'};">${((s.errorRate || 0) * 100).toFixed(1)}%</td>
+              <td>${statusBadge}</td>
+            </tr>
+          `;
+        }).join('');
+      }
+    }
+
+    function renderAnomalyAlerts(anomalies) {
+      const section = document.getElementById('anomalyAlertSection');
+      const list = document.getElementById('anomalyList');
+      if (!section || !list) return;
+
+      const items = [];
+      if (anomalies?.tailDivergence) {
+        items.push(`<div style="display:flex;align-items:center;gap:6px;">
+          <span class="badge badge-warning">Tail Divergence</span>
+          <span>p99 latency (<b>${(anomalies.tailRatio || 0).toFixed(1)}x</b> median) significantly diverges from standard distribution.</span>
+        </div>`);
+      }
+      if (anomalies?.bimodal) {
+        items.push(`<div style="display:flex;align-items:center;gap:6px;">
+          <span class="badge badge-danger">Bimodal Latency</span>
+          <span>Dual latency peaks detected — typical sign of lock contention, GC pauses, or cache miss cascades.</span>
+        </div>`);
+      }
+
+      if (items.length) {
+        section.style.display = 'block';
+        list.innerHTML = items.join('');
+      } else {
+        section.style.display = 'none';
+      }
+    }
+
+    function renderLatencyDistribution(dist) {
+      const section = document.getElementById('latencyDistSection');
+      const bars = document.getElementById('latencyDistBars');
+      if (!section || !bars || !dist || !dist.buckets) return;
+
+      section.style.display = 'block';
+      const colors = [
+        '#10b981', '#10b981', '#06b6d4', '#06b6d4',
+        '#3b82f6', '#f59e0b', '#f97316', '#ef4444'
+      ];
+
+      bars.innerHTML = dist.buckets.map((b, i) => {
+        const pct = (b.pct || 0).toFixed(1);
+        const barWidth = Math.max(pct, b.count > 0 ? 2 : 0);
+        return `
+          <div style="display:grid;grid-template-columns:85px 1fr 65px 55px;gap:10px;align-items:center;font-size:11px;font-family:var(--font-mono);">
+            <span style="color:var(--text-muted);text-align:right;">${b.label}</span>
+            <div style="background:var(--bg-subtle);height:14px;border-radius:3px;overflow:hidden;position:relative;">
+              <div style="background:${colors[i] || '#06b6d4'};width:${barWidth}%;height:100%;border-radius:3px;transition:width 0.3s;"></div>
+            </div>
+            <span style="color:var(--text-dim);text-align:right;">${b.count} reqs</span>
+            <span style="color:var(--text-main);font-weight:600;text-align:right;">${pct}%</span>
+          </div>
+        `;
+      }).join('');
     }
 
     function renderTestMetrics(summary) {
@@ -1697,6 +2053,16 @@
         p99: summary.latencyMs?.p99 || 0,
         avg: summary.latencyMs?.avg || 0
       });
+
+      if (summary.anomalies) {
+        renderAnomalyAlerts(summary.anomalies);
+      }
+      if (summary.distribution) {
+        renderLatencyDistribution(summary.distribution);
+      }
+      if (summary.capacity) {
+        renderCapacityResults(summary.capacity);
+      }
 
       // Failure Breakdown Rendering
       const failSection = document.getElementById('failureBreakdownSection');

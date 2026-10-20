@@ -205,4 +205,39 @@ test('UI Server API Suite', async (t) => {
     assert.equal(data.collection.info.name, 'ui-postman-export');
     assert.equal(data.collection.item.length, 1);
   });
+
+  await t.test('POST /api/waveform generates valid traffic profile stages', async () => {
+    const { status, data } = await requestJson('/api/waveform', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ waveform: 'sine', options: { duration: 30, baseRps: 10, peakRps: 50 } })
+    });
+    assert.equal(status, 200);
+    assert.equal(data.waveform, 'sine');
+    assert.ok(data.stages.length >= 6);
+  });
+
+  await t.test('POST /api/mock/routes and GET /api/mock/routes manage dynamic routes in UI server', async () => {
+    // Start mock server first via UI endpoint
+    const startRes = await requestJson('/api/mock/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ port: 8098 }) });
+    assert.equal(startRes.status, 200);
+
+    // Register route
+    const { status: postStatus, data: postData } = await requestJson('/api/mock/routes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: '/api/ui-dynamic', method: 'GET', status: 200, body: { dynamic: true } })
+    });
+    assert.equal(postStatus, 200);
+    assert.equal(postData.success, true);
+
+    // List routes
+    const { status: listStatus, data: listData } = await requestJson('/api/mock/routes');
+    assert.equal(listStatus, 200);
+    const routes = Array.isArray(listData) ? listData : listData.routes || [];
+    assert.ok(routes.some(r => r.path === '/api/ui-dynamic'));
+
+    // Stop mock server
+    await requestJson('/api/mock/stop', { method: 'POST' });
+  });
 });

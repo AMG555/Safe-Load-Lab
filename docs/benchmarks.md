@@ -56,3 +56,59 @@ Safe Load Lab computes all requested percentiles in a single sorted pass:
 - Only reads the response body when needed for assertions or variable extraction.
 - Automatic memory threshold warning at 50,000 cumulative results to prevent heap exhaustion during sustained stress testing.
 - Streaming CSV and JSON generation without loading redundant buffers into memory.
+
+---
+
+## 5. Autonomous Capacity Discovery & Inflection Knee Sizing
+
+### Problem
+Traditional capacity testing requires manual guess-and-check runs, risking production target outages and failing to mathematically determine safe operational headroom.
+
+### Architecture Solution
+Safe Load Lab features an autonomous breaking point engine (`sll capacity` / `sll break`):
+- **Stepped Ladder Ramp**: Progressively steps through RPS ranges (default: 10 to 100 RPS in 10 RPS increments) for sustained probing durations.
+- **Dynamic Breaking Point Evaluation**:
+  - Monitors p95 latency against target SLA threshold (e.g. `p95 <= 200ms`).
+  - Monitors error rates against allowable limits (e.g. `errorRate <= 1.0%`).
+- **Saturation Knee Detection**:
+  - Calculates throughput saturation where achieved RPS diverges from target RPS:
+    $$\text{Ratio} = \frac{\text{Achieved RPS}}{\text{Target RPS}} < 0.85$$
+- **Production Sizing & 80% Headroom**:
+  - Identifies the maximum sustainable "Sweet Spot" RPS.
+  - Automatically calculates recommended production autoscaling ceilings using the 80% safe headroom rule:
+    $$\text{Headroom RPS} = \lfloor \text{Sweet Spot RPS} \times 0.80 \rfloor$$
+
+---
+
+## 6. Logarithmic HDR Histogram & Statistical Anomaly Detection
+
+### Logarithmic Distribution Buckets
+Instead of linear histograms that obscure sub-millisecond variations or cluster long tails together, latency measurements are categorized into 8 logarithmic brackets:
+- `<10ms` (Instantaneous in-memory cache)
+- `10-25ms` (Optimized local microservices)
+- `25-50ms` (Standard database queries)
+- `50-100ms` (Network transit / external API calls)
+- `100-250ms` (Complex queries / heavier workloads)
+- `250-500ms` (Degraded response times)
+- `500ms-1s` (Severe latency spikes)
+- `>1s` (Timeout risk boundary)
+
+### Statistical Anomaly Algorithms
+1. **Tail Divergence Anomaly**:
+   - Compares the 95th percentile against median (p50):
+     $$\text{Tail Ratio} = \frac{p_{95}}{p_{50}} \ge 3.5$$
+   - Flags hidden tail latency amplification where high percentiles degrade while averages appear healthy.
+2. **Bimodal Latency Distribution**:
+   - Analyzes non-adjacent bucket densities. If fast buckets (`<25ms`) and slow buckets (`>100ms`) both exceed 15% frequency with a hollow intermediate valley, bimodal latency is flagged.
+   - Immediately diagnoses cold-start cache misses, thread pool contention, or uneven backend cluster routing.
+
+---
+
+## 7. Zero-Dependency Executive Embedded SVG Visualization
+
+- Zero external CDN dependencies, script tags, or third-party charting libraries.
+- Dynamically renders self-contained vector SVG charts directly into HTML reports:
+  - **Percentile Progression Curve**: Smooth SVG path tracing $p_{50} \to p_{90} \to p_{95} \to p_{99}$ with milestone gridlines.
+  - **Latency HDR Histogram**: Color-coded SVG bar chart with percentage labels and anomaly alert callouts.
+- 100% portable for air-gapped CI/CD environments, firewall-restricted corporate networks, and offline inspection.
+

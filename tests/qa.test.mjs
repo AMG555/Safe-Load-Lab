@@ -27,7 +27,13 @@ import {
   setHighCapacityMode,
   compareReports,
   generateSparkline,
-  runTest
+  runTest,
+  computeLatencyDistribution,
+  generateTrafficProfile,
+  runCapacityTest,
+  generateCapacityMarkdownReport,
+  writeCapacityHtmlReport,
+  writeHtmlReport
 } from '../bin/safe-load-lab.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -770,6 +776,219 @@ test('QA CLI - diff command runs and exits cleanly on identical reports', () => 
     assert.match(res.stdout, /No regression detected/);
   } finally {
     try { fs.unlinkSync(sampleReport); } catch {}
+  }
+});
+
+// ─── 14. Latency Distribution & Anomaly Detection Tests ───────────────
+
+test('QA Latency - computeLatencyDistribution classifies 8 logarithmic buckets', () => {
+  const empty = computeLatencyDistribution([]);
+  assert.equal(empty.buckets.length, 8);
+  assert.equal(empty.anomalies.tailDivergence, false);
+
+  const sample = [5, 8, 15, 22, 45, 90, 150, 400, 800, 1500];
+  const dist = computeLatencyDistribution(sample);
+  assert.equal(dist.buckets.length, 8);
+  assert.equal(dist.buckets[0].label, '<10ms');
+  assert.equal(dist.buckets[0].count, 2);
+  assert.equal(dist.buckets[7].label, '>1s');
+  assert.equal(dist.buckets[7].count, 1);
+  assert.equal(typeof dist.anomalies.tailRatio, 'number');
+});
+
+test('QA Latency - computeLatencyDistribution detects tail divergence', () => {
+  // 50 requests around 10ms, but 2 requests at 200ms
+  const latencies = [];
+  for (let i = 0; i < 48; i++) latencies.push(10);
+  latencies.push(150);
+  latencies.push(200);
+
+  const dist = computeLatencyDistribution(latencies);
+  assert.equal(dist.anomalies.tailDivergence, true);
+  assert.ok(dist.anomalies.tailRatio >= 3.5);
+});
+
+test('QA Latency - computeLatencyDistribution detects bimodal distribution', () => {
+  // Two distinct peaks: one around 10ms, one around 500ms
+  const latencies = [];
+  for (let i = 0; i < 20; i++) latencies.push(8);
+  for (let i = 0; i < 20; i++) latencies.push(450);
+
+  const dist = computeLatencyDistribution(latencies);
+  assert.equal(dist.anomalies.bimodal, true);
+});
+
+// ─── 15. Traffic Waveform Shaping Tests ────────────────────────────────
+
+test('QA Waveform - generateTrafficProfile creates valid profiles', () => {
+  const sine = generateTrafficProfile('sine', { duration: 30, baseRps: 10, peakRps: 40 });
+  assert.ok(sine.stages.length >= 6);
+  assert.equal(sine.waveform, 'sine');
+  assert.ok(sine.stages.some(s => s.targetRps > 10));
+
+  const ladder = generateTrafficProfile('ladder', { duration: 30, baseRps: 10, peakRps: 50 });
+  assert.ok(ladder.stages.length >= 4);
+  // monotonic increasing up to peak
+  for (let i = 1; i < 4; i++) {
+    assert.ok(ladder.stages[i].targetRps >= ladder.stages[i - 1].targetRps);
+  }
+  assert.equal(ladder.stages[4].name, 'step-cooldown');
+
+  const burst = generateTrafficProfile('burst', { duration: 30, baseRps: 5, peakRps: 30 });
+  assert.ok(burst.stages.length >= 4);
+  assert.equal(burst.waveform, 'burst');
+
+  const constant = generateTrafficProfile('constant', { duration: 20, baseRps: 15 });
+  assert.equal(constant.stages.length, 1);
+  assert.equal(constant.stages[0].targetRps, 15);
+});
+
+// ─── 16. Mock Server Chaos & Custom Dynamic Routes Tests ───────────────
+
+test('QA Mock Server - handles /chaos endpoint with failure injection', async () => {
+  const port = 4130;
+  const server = startMockServer(port, '127.0.0.1');
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/chaos?failRate=1.0`);
+    assert.equal(res.status, 500);
+    const body = await res.json();
+    assert.match(body.error, /Chaos/i);
+  } finally {
+    server.close();
+  }
+});
+
+test('QA Mock Server - handles /slow-stream endpoint', async () => {
+  const port = 4131;
+  const server = startMockServer(port, '127.0.0.1');
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/slow-stream?chunks=3&chunkDelay=5`);
+    assert.equal(res.status, 200);
+    const text = await res.text();
+    assert.match(text, /"chunk":1/);
+    assert.match(text, /"chunk":2/);
+    assert.match(text, /"chunk":3/);
+  } finally {
+    server.close();
+  }
+});
+
+test('QA Mock Server - registers, serves, and deletes dynamic /mock/routes', async () => {
+  const port = 4132;
+  const server = startMockServer(port, '127.0.0.1');
+  try {
+    // 1. Register custom route
+    const regRes = await fetch(`http://127.0.0.1:${port}/mock/routes`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        path: '/api/custom-endpoint',
+        method: 'GET',
+        status: 201,
+        body: { custom: true, key: 'abc-123' }
+      })
+    });
+    assert.equal(regRes.status, 200);
+    const regBody = await regRes.json();
+    assert.equal(regBody.success, true);
+
+    // 2. Query registered route
+    const queryRes = await fetch(`http://127.0.0.1:${port}/api/custom-endpoint`);
+    assert.equal(queryRes.status, 201);
+    const queryBody = await queryRes.json();
+    assert.equal(queryBody.custom, true);
+    assert.equal(queryBody.key, 'abc-123');
+
+    // 3. List routes
+    const listRes = await fetch(`http://127.0.0.1:${port}/mock/routes`);
+    const listData = await listRes.json();
+    const routes = Array.isArray(listData) ? listData : listData.routes || [];
+    assert.ok(routes.some(r => r.path === '/api/custom-endpoint'));
+
+    // 4. Delete route
+    const delRes = await fetch(`http://127.0.0.1:${port}/mock/routes?path=/api/custom-endpoint`, {
+      method: 'DELETE'
+    });
+    assert.equal(delRes.status, 200);
+
+    // 5. Query after delete returns 404
+    const notFound = await fetch(`http://127.0.0.1:${port}/api/custom-endpoint`);
+    assert.equal(notFound.status, 404);
+  } finally {
+    server.close();
+  }
+});
+
+// ─── 17. Autonomous Capacity Engine Tests ──────────────────────────────
+
+test('QA Capacity Engine - runCapacityTest discovers safe headroom and writes reports', async () => {
+  const port = 4133;
+  const server = startMockServer(port, '127.0.0.1');
+  const tempDir = path.join(root, 'reports', 'test-capacity-tmp');
+  fs.mkdirSync(tempDir, { recursive: true });
+
+  try {
+    const result = await runCapacityTest({
+      url: `http://127.0.0.1:${port}/fast`,
+      targetSla: 200,
+      startRps: 5,
+      stepIncrement: 5,
+      maxRps: 15,
+      stepDuration: 2,
+      concurrency: 2,
+      reportName: 'test-qa-capacity'
+    });
+
+    assert.ok(result);
+    assert.ok(result.steps.length >= 1);
+    assert.equal(typeof result.safeHeadroomRps, 'number');
+    assert.ok(result.safeHeadroomRps > 0);
+
+    // Test markdown report generation
+    const md = generateCapacityMarkdownReport(result);
+    assert.match(md, /Safe Load Lab/);
+    assert.match(md, /Capacity/i);
+
+    // Test HTML report generation
+    const htmlPath = path.join(tempDir, 'cap-report.html');
+    writeCapacityHtmlReport(htmlPath, result);
+    assert.ok(fs.existsSync(htmlPath));
+    const htmlContent = fs.readFileSync(htmlPath, 'utf8');
+    assert.match(htmlContent, /Safe Load Lab/);
+    assert.match(htmlContent, /Probe Matrix/);
+  } finally {
+    server.close();
+    try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {}
+  }
+});
+
+test('QA Executive HTML Report - writeHtmlReport renders SVG histogram and percentiles', () => {
+  const tempDir = path.join(root, 'reports', 'test-html-tmp');
+  fs.mkdirSync(tempDir, { recursive: true });
+  const htmlPath = path.join(tempDir, 'executive.html');
+
+  const summary = {
+    testName: 'executive-benchmark',
+    durationSeconds: 10,
+    concurrency: 4,
+    rps: 20,
+    totals: { requests: 200, successful: 198, failed: 2, errorRate: 0.01, achievedRps: 19.8 },
+    latencyMs: { min: 4, max: 80, avg: 15.2, p50: 12.0, p90: 22.0, p95: 35.0, p99: 65.0 },
+    bandwidth: { totalBytes: 50000, throughputKbps: 40, throughputMbps: 0.04 },
+    thresholdsPassed: true,
+    anomalies: { tailDivergence: false, bimodal: false, tailRatio: 2.1 },
+    distribution: computeLatencyDistribution([5, 8, 12, 14, 25, 35, 65])
+  };
+
+  try {
+    writeHtmlReport(htmlPath, summary, []);
+    assert.ok(fs.existsSync(htmlPath));
+    const content = fs.readFileSync(htmlPath, 'utf8');
+    assert.match(content, /Safe Load Lab Report/);
+    assert.match(content, /HDR.*Distribution/);
+    assert.match(content, /<svg/);
+  } finally {
+    try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {}
   }
 });
 
