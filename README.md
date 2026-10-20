@@ -124,6 +124,7 @@ sll plan --config examples/advanced.json --env local
 
 | Command | Description |
 |---------|-------------|
+| `bench`, `quick` | Run instant zero-config micro-benchmark on single endpoint |
 | `run` | Run a controlled load test |
 | `probe`, `ping` | Send a single preflight probe request to verify endpoint status, latency, and assertions |
 | `ci` | Generate ready-to-use CI/CD workflow (`github` or `gitlab`) |
@@ -132,6 +133,7 @@ sll plan --config examples/advanced.json --env local
 | `import-curl` | Convert cURL command string to Safe Load Lab test config |
 | `import-postman` | Convert Postman Collection JSON to Safe Load Lab test config |
 | `import-openapi` | Convert OpenAPI 3.0 / Swagger 2.0 specification to Safe Load Lab test config |
+| `import-har` | Convert browser HAR (HTTP Archive) network recording to test config |
 | `spike` | Run a spike test (baseline → spike → recovery) |
 | `soak` | Run a soak test (sustained load over time) |
 | `stress` | Run a stress test (gradually increasing load) |
@@ -187,6 +189,52 @@ sll ci --type gitlab --out .gitlab-ci.yml
 ```
 
 Tests run in CI fail automatically when response times exceed thresholds or error rate limits are breached.
+
+## Quick Micro-Benchmarking
+
+Run instant zero-config micro-benchmarks on any endpoint without creating configuration files:
+
+```bash
+# Instant 10-second benchmark (5 concurrency, 10 RPS)
+sll bench http://localhost:8080/fast --i-own-this-target
+
+# Custom duration and rate
+sll bench http://localhost:8080/fast --duration 15 --concurrency 10 --rps 25 --i-own-this-target
+```
+
+## Browser HAR Recording Conversion
+
+Export network activity directly from Chrome/Firefox DevTools and convert it into a load-test scenario:
+
+```bash
+# Convert HAR into Safe Load Lab config (filters binary assets automatically)
+sll import-har user-flow.har -o scenario.json
+
+# Include static assets if desired
+sll import-har user-flow.har --include-assets -o scenario.json
+```
+
+## Prometheus & OpenMetrics Live Scraping
+
+Safe Load Lab Web Studio exposes an OpenMetrics Prometheus endpoint:
+
+```bash
+# Start Studio
+npm run ui
+
+# Scrape metrics (Prometheus format)
+curl http://localhost:3001/metrics
+```
+
+Metrics include:
+- `safeloadlab_uptime_seconds`
+- `safeloadlab_active_test` (1 or 0)
+- `safeloadlab_mock_running` (1 or 0)
+- `safeloadlab_last_test_requests`
+- `safeloadlab_last_test_failed`
+- `safeloadlab_last_test_rps`
+- `safeloadlab_last_test_p95_ms`
+- `safeloadlab_last_test_error_rate`
 
 ## Hermetic Local Mock Server
 

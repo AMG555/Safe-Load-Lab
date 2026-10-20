@@ -181,6 +181,7 @@ Usage:
   sll mock --port 8080
 
 Commands:
+  bench, quick    Run quick zero-config benchmark on single endpoint
   run             Run a controlled load test
   probe, ping     Send single preflight probe to verify target status, latency, & assertions
   ci              Generate CI/CD pipeline workflow (GitHub Actions or GitLab CI)
@@ -189,6 +190,7 @@ Commands:
   import-curl     Convert cURL command string to Safe Load Lab test config
   import-postman  Convert Postman Collection JSON to Safe Load Lab test config
   import-openapi  Convert OpenAPI/Swagger JSON to Safe Load Lab test config
+  import-har      Convert browser HAR (HTTP Archive) recording to Safe Load Lab test config
   validate        Validate and normalize a config without sending traffic
   plan            Show resolved test plan without sending traffic
   sample          Create a sample config file
@@ -200,7 +202,7 @@ Commands:
   version         Show version
   help            Show help
 
-Required safety flag for run/ab/rate-limit/spike/soak/stress:
+Required safety flag for run/bench/quick/ab/rate-limit/spike/soak/stress:
   --i-own-this-target       Confirms you own or have explicit permission to test the target
 
 Common options:
@@ -212,6 +214,7 @@ Common options:
   --header "K: V"           Header, repeatable
   --data <file>             CSV data feed file for parameterization ({{data.column}})
   --data-mode <mode>        Data selection: round-robin (default) or random
+  --include-assets          Include static assets (css, images, fonts) when importing HAR
   --duration <seconds>      Test duration, max ${HARD_LIMITS.maxDurationSeconds}, default 30
   --concurrency <number>    Max concurrent workers, max ${HARD_LIMITS.maxConcurrency}, default 5
   --rps <number>            Max requests per second, max ${HARD_LIMITS.maxRps}, default 10
@@ -249,6 +252,7 @@ Mock server options:
   --host <string>           Mock server host, default 127.0.0.1
 
 Examples:
+  sll bench http://localhost:8080/fast --i-own-this-target
   sll mock --port 8080
   sll ab --url-a http://localhost:8080/fast --url-b http://localhost:8080/slow --duration 10 --i-own-this-target
   sll run --curl "curl -X POST http://localhost:8080/echo -d '{\\"foo\\":\\"bar\\"}'" --duration 10 --i-own-this-target
@@ -270,7 +274,10 @@ function parseArgs(argv) {
     const item = argv[i];
     if (!item.startsWith('--')) { args._.push(item); continue; }
     const key = item.slice(2);
-    if (key === 'i-own-this-target') { args[key] = true; continue; }
+    if (['i-own-this-target', 'include-assets', 'realistic', 'verbose', 'debug'].includes(key)) {
+      args[key] = true;
+      continue;
+    }
     const value = argv[i + 1];
     if (value === undefined || value.startsWith('--')) { args[key] = true; continue; }
     i++;
@@ -632,6 +639,79 @@ function parseOpenApiSpec(content, options = {}) {
 
   return {
     name: spec.info?.title ? `${spec.info.title.toLowerCase().replace(/[^a-z0-9_-]/g, '-')}-load-test` : 'openapi-load-test',
+    durationSeconds: Number(options.duration || 30),
+    concurrency: Number(options.concurrency || 5),
+    rps: Number(options.rps || 10),
+    timeoutMs: Number(options.timeout || 10000),
+    endpoints
+  };
+}
+
+function parseHarRecording(content, options = {}) {
+  const har = typeof content === 'string' ? JSON.parse(content) : content;
+  const entries = har.log?.entries;
+  if (!Array.isArray(entries) || entries.length === 0) {
+    throw new Error('Invalid HAR recording: missing log.entries array');
+  }
+
+  const excludeAssets = options.includeAssets !== true && options['include-assets'] !== true;
+  const assetRegex = /\.(css|png|jpe?g|gif|svg|ico|woff2?|ttf|eot|webp|avif|mp4|webm)(\?.*)?$/i;
+  const skipHeaders = new Set(['host', 'content-length', 'connection', 'cookie', ':method', ':scheme', ':authority', ':path']);
+
+  const endpoints = [];
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    const req = entry.request;
+    if (!req || !req.url) continue;
+
+    const url = req.url;
+    if (!url.startsWith('http://') && !url.startsWith('https://')) continue;
+
+    let parsedUrl;
+    try {
+      parsedUrl = new URL(url);
+    } catch {
+      continue;
+    }
+
+    if (excludeAssets && assetRegex.test(parsedUrl.pathname)) continue;
+    if (options.host && parsedUrl.host !== options.host) continue;
+
+    const method = String(req.method || 'GET').toUpperCase();
+    const headers = {};
+    for (const h of req.headers || []) {
+      const nameLower = (h.name || '').toLowerCase();
+      if (!nameLower || skipHeaders.has(nameLower) || nameLower.startsWith('sec-ch-ua')) continue;
+      headers[h.name] = h.value || '';
+    }
+
+    let body = null;
+    if (req.postData?.text) {
+      body = req.postData.text;
+      if (req.postData.mimeType && !headers['Content-Type'] && !headers['content-type']) {
+        headers['Content-Type'] = req.postData.mimeType;
+      }
+    }
+
+    const pathClean = parsedUrl.pathname === '/' ? '' : parsedUrl.pathname.replace(/\//g, '-');
+    const name = `${method.toLowerCase()}${pathClean || '-root'}`;
+
+    endpoints.push({
+      name: `${name}-${endpoints.length + 1}`,
+      url,
+      method,
+      headers,
+      body,
+      weight: 1
+    });
+  }
+
+  if (!endpoints.length) {
+    throw new Error('No HTTP endpoints found in HAR file (try --include-assets if all were filtered)');
+  }
+
+  return {
+    name: options.name || 'har-imported-test',
     durationSeconds: Number(options.duration || 30),
     concurrency: Number(options.concurrency || 5),
     rps: Number(options.rps || 10),
@@ -1173,12 +1253,21 @@ function evaluateAssertions(result, assertions = []) {
     try {
       switch (assertion.type) {
         case 'status':
-          assertionResult.expected = assertion.value;
-          assertionResult.actual = result.status;
-          assertionResult.passed = result.status === assertion.value;
-          assertionResult.message = assertionResult.passed 
-            ? 'Status matches' 
-            : `Expected ${assertion.value}, got ${result.status}`;
+          if (Array.isArray(assertion.in)) {
+            assertionResult.expected = `one of [${assertion.in.join(', ')}]`;
+            assertionResult.actual = result.status;
+            assertionResult.passed = assertion.in.includes(result.status);
+            assertionResult.message = assertionResult.passed
+              ? `Status ${result.status} in expected set`
+              : `Expected one of [${assertion.in.join(', ')}], got ${result.status}`;
+          } else {
+            assertionResult.expected = assertion.value;
+            assertionResult.actual = result.status;
+            assertionResult.passed = result.status === assertion.value;
+            assertionResult.message = assertionResult.passed 
+              ? 'Status matches' 
+              : `Expected ${assertion.value}, got ${result.status}`;
+          }
           break;
           
         case 'jsonPath':
@@ -1193,13 +1282,63 @@ function evaluateAssertions(result, assertions = []) {
               : `Expected ${assertion.equals}, got ${value}`;
           } else if (assertion.contains !== undefined) {
             assertionResult.expected = `contains "${assertion.contains}"`;
-            assertionResult.passed = String(value).includes(assertion.contains);
+            assertionResult.passed = String(value ?? '').includes(assertion.contains);
             assertionResult.message = assertionResult.passed
               ? 'Contains expected value'
               : `Expected to contain "${assertion.contains}", got ${value}`;
+          } else if (assertion.greaterThan !== undefined) {
+            assertionResult.expected = `> ${assertion.greaterThan}`;
+            assertionResult.passed = Number(value) > assertion.greaterThan;
+            assertionResult.message = assertionResult.passed
+              ? 'Value exceeds threshold'
+              : `Expected > ${assertion.greaterThan}, got ${value}`;
+          } else if (assertion.lessThan !== undefined) {
+            assertionResult.expected = `< ${assertion.lessThan}`;
+            assertionResult.passed = Number(value) < assertion.lessThan;
+            assertionResult.message = assertionResult.passed
+              ? 'Value is below threshold'
+              : `Expected < ${assertion.lessThan}, got ${value}`;
+          } else if (assertion.exists !== undefined) {
+            assertionResult.expected = assertion.exists ? 'exists' : 'does not exist';
+            assertionResult.passed = (value !== undefined) === Boolean(assertion.exists);
+            assertionResult.message = assertionResult.passed
+              ? 'Path existence matches'
+              : `Expected ${assertion.exists ? 'existence' : 'non-existence'}, got ${value !== undefined ? 'exists' : 'undefined'}`;
           }
           break;
           
+        case 'regex':
+        case 'bodyRegex': {
+          const pattern = new RegExp(assertion.pattern, assertion.flags || '');
+          assertionResult.expected = `matches /${assertion.pattern}/${assertion.flags || ''}`;
+          assertionResult.passed = pattern.test(result.body || '');
+          assertionResult.actual = (result.body || '').slice(0, 100);
+          assertionResult.message = assertionResult.passed
+            ? 'Body matches regex pattern'
+            : `Body does not match /${assertion.pattern}/`;
+          break;
+        }
+
+        case 'jsonSchema':
+        case 'schema': {
+          if (!responseBody || typeof responseBody !== 'object') {
+            assertionResult.passed = false;
+            assertionResult.expected = 'valid JSON object';
+            assertionResult.actual = typeof responseBody;
+            assertionResult.message = 'Response body is not a JSON object';
+          } else {
+            const required = Array.isArray(assertion.required) ? assertion.required : [];
+            const missing = required.filter(field => getByPath(responseBody, field) === undefined);
+            assertionResult.passed = missing.length === 0;
+            assertionResult.expected = `required: [${required.join(', ')}]`;
+            assertionResult.actual = missing.length ? `missing: [${missing.join(', ')}]` : 'all required present';
+            assertionResult.message = assertionResult.passed
+              ? 'Schema validation passed'
+              : `Missing required schema fields: ${missing.join(', ')}`;
+          }
+          break;
+        }
+
         case 'header':
           const headerValue = result.headers?.[assertion.name.toLowerCase()];
           assertionResult.actual = headerValue;
@@ -2444,6 +2583,20 @@ async function main() {
     }
     return;
   }
+  if (command === 'import-har') {
+    const file = args._[1] || args.file;
+    if (!file) throw new Error('import-har requires a HAR file path: sll import-har <file.har>');
+    const content = fs.readFileSync(file, 'utf8');
+    const configOut = parseHarRecording(content, args);
+    if (args.out) {
+      ensureDirFor(args.out);
+      fs.writeFileSync(args.out, JSON.stringify(configOut, null, 2));
+      console.log(chalk.green(`✓ Converted HAR recording to ${args.out} (${configOut.endpoints.length} endpoints)`));
+    } else {
+      console.log(JSON.stringify(configOut, null, 2));
+    }
+    return;
+  }
   if (command === 'probe' || command === 'ping') {
     let ep;
     if (args.curl) {
@@ -2476,6 +2629,20 @@ async function main() {
     return;
   }
   if (!args['i-own-this-target']) throw new Error('Missing required safety flag: --i-own-this-target');
+  if (command === 'bench' || command === 'quick') {
+    const targetUrl = args._[1] || args.url;
+    if (!targetUrl) throw new Error('bench requires a target URL: sll bench <url> --i-own-this-target');
+    args.url = targetUrl;
+    args.duration = args.duration || 10;
+    args.concurrency = args.concurrency || 5;
+    args.rps = args.rps || 10;
+    const config = normalizeConfig(args);
+    const { summary, results } = await runTest(config);
+    printSummary(summary);
+    await saveReports(args, summary, results);
+    if (Object.values(summary.thresholds || {}).some(v => !v.pass)) process.exitCode = 2;
+    return;
+  }
   if (command === 'ab' || command === 'diff') {
     const { diff } = await runAbTest(args);
     if (diff.isRegression) process.exitCode = 2;
@@ -2599,6 +2766,7 @@ export {
   loadEnvFile,
   parseCsvData,
   probeEndpoint,
-  generateCiWorkflow
+  generateCiWorkflow,
+  parseHarRecording
 };
 

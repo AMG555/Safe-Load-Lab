@@ -31,6 +31,7 @@ let mockProcess = null;
 let mockPort = 8080;
 let activeTestProcess = null;
 let activeTestMeta = null;
+let lastTestSummary = null;
 
 // Ensure reports directory exists
 if (!fs.existsSync(REPORTS_DIR)) {
@@ -227,6 +228,7 @@ app.post('/api/run', (req, res) => {
       try {
         const report = JSON.parse(fs.readFileSync(`${reportPath}.json`, 'utf8'));
         summary = report.summary;
+        if (summary) lastTestSummary = summary;
       } catch {}
 
       res.write(`data: ${JSON.stringify({
@@ -601,6 +603,19 @@ app.post('/api/import/openapi', (req, res) => {
   }
 });
 
+// Convert HAR recording
+app.post('/api/import/har', (req, res) => {
+  const { content, duration, concurrency, rps, includeAssets, host } = req.body;
+  if (!content) return res.status(400).json({ error: 'HAR recording JSON required' });
+  try {
+    if (!sll) return res.status(503).json({ error: 'Engine helper initializing' });
+    const config = sll.parseHarRecording(content, { duration, concurrency, rps, includeAssets, host });
+    res.json(config);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 // Preflight single request probe
 app.post('/api/probe', async (req, res) => {
   const { url, method, headers, body, assertions, timeout, variables } = req.body;
@@ -665,6 +680,45 @@ app.delete('/api/reports/:name', (req, res) => {
   }
 
   res.json({ success: true, message: `Deleted ${deletedCount} report files for ${safeName}` });
+});
+
+// Prometheus / OpenMetrics scraping endpoint
+app.get('/metrics', (req, res) => {
+  const uptime = Math.round(process.uptime());
+  const lines = [
+    '# HELP safeloadlab_uptime_seconds Total runtime of Safe Load Lab studio server',
+    '# TYPE safeloadlab_uptime_seconds gauge',
+    `safeloadlab_uptime_seconds ${uptime}`,
+    '# HELP safeloadlab_active_test Whether a load test is actively executing (1 or 0)',
+    '# TYPE safeloadlab_active_test gauge',
+    `safeloadlab_active_test ${activeTestProcess ? 1 : 0}`,
+    '# HELP safeloadlab_mock_running Whether the hermetic mock server is running (1 or 0)',
+    '# TYPE safeloadlab_mock_running gauge',
+    `safeloadlab_mock_running ${mockProcess ? 1 : 0}`
+  ];
+
+  if (lastTestSummary) {
+    lines.push(
+      '# HELP safeloadlab_last_test_requests Total requests in latest test',
+      '# TYPE safeloadlab_last_test_requests counter',
+      `safeloadlab_last_test_requests ${lastTestSummary.totals?.requests || 0}`,
+      '# HELP safeloadlab_last_test_failed Total failed requests in latest test',
+      '# TYPE safeloadlab_last_test_failed counter',
+      `safeloadlab_last_test_failed ${lastTestSummary.totals?.failed || 0}`,
+      '# HELP safeloadlab_last_test_rps Achieved requests per second in latest test',
+      '# TYPE safeloadlab_last_test_rps gauge',
+      `safeloadlab_last_test_rps ${(lastTestSummary.totals?.achievedRps || 0).toFixed(2)}`,
+      '# HELP safeloadlab_last_test_p95_ms 95th percentile latency in milliseconds',
+      '# TYPE safeloadlab_last_test_p95_ms gauge',
+      `safeloadlab_last_test_p95_ms ${(lastTestSummary.latencyMs?.p95 || 0).toFixed(2)}`,
+      '# HELP safeloadlab_last_test_error_rate Error rate ratio in latest test',
+      '# TYPE safeloadlab_last_test_error_rate gauge',
+      `safeloadlab_last_test_error_rate ${(lastTestSummary.totals?.errorRate || 0).toFixed(4)}`
+    );
+  }
+
+  res.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
+  res.send(lines.join('\n') + '\n');
 });
 
 if (require.main === module) {

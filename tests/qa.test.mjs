@@ -18,7 +18,8 @@ import {
   HARD_LIMITS,
   parseCsvData,
   probeEndpoint,
-  generateCiWorkflow
+  generateCiWorkflow,
+  parseHarRecording
 } from '../bin/safe-load-lab.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -462,5 +463,132 @@ test('QA CLI - ci command outputs workflow yaml', () => {
   assert.equal(res.status, 0);
   assert.match(res.stdout, /Safe Load Lab/);
 });
+
+// ─── 12. HAR Importer QA Tests ────────────────────────────────────────
+
+test('QA HAR Importer - parses entries and excludes static assets by default', () => {
+  const sampleHar = {
+    log: {
+      version: '1.2',
+      entries: [
+        {
+          request: {
+            method: 'GET',
+            url: 'http://127.0.0.1:8080/api/users',
+            headers: [{ name: 'Accept', value: 'application/json' }]
+          }
+        },
+        {
+          request: {
+            method: 'GET',
+            url: 'http://127.0.0.1:8080/static/bundle.css',
+            headers: []
+          }
+        },
+        {
+          request: {
+            method: 'GET',
+            url: 'http://127.0.0.1:8080/images/logo.png',
+            headers: []
+          }
+        },
+        {
+          request: {
+            method: 'POST',
+            url: 'http://127.0.0.1:8080/api/login',
+            headers: [{ name: 'Content-Type', value: 'application/json' }],
+            postData: { mimeType: 'application/json', text: '{"user":"test"}' }
+          }
+        }
+      ]
+    }
+  };
+
+  const config = parseHarRecording(JSON.stringify(sampleHar));
+  assert.equal(config.endpoints.length, 2);
+  assert.equal(config.endpoints[0].method, 'GET');
+  assert.equal(config.endpoints[0].url, 'http://127.0.0.1:8080/api/users');
+  assert.equal(config.endpoints[0].headers.Accept, 'application/json');
+
+  assert.equal(config.endpoints[1].method, 'POST');
+  assert.equal(config.endpoints[1].body, '{"user":"test"}');
+});
+
+test('QA HAR Importer - includes assets when explicitly requested', () => {
+  const sampleHar = {
+    log: {
+      entries: [
+        { request: { method: 'GET', url: 'http://127.0.0.1:8080/style.css' } },
+        { request: { method: 'GET', url: 'http://127.0.0.1:8080/api/ping' } }
+      ]
+    }
+  };
+
+  const config = parseHarRecording(sampleHar, { includeAssets: true });
+  assert.equal(config.endpoints.length, 2);
+});
+
+test('QA HAR Importer - throws error on invalid or empty recording', () => {
+  assert.throws(() => parseHarRecording({}), /Invalid HAR recording/);
+  assert.throws(() => parseHarRecording({ log: { entries: [] } }), /Invalid HAR recording/);
+});
+
+// ─── 13. Enhanced Assertions QA Tests ─────────────────────────────────
+
+test('QA Assertions - evaluates regex on response body', () => {
+  const res = { status: 200, durationMs: 40, body: '{"token":"abc-12345-xyz"}' };
+  const assertions = [
+    { type: 'regex', pattern: 'token":"[a-z]+-[0-9]+-[a-z]+"' },
+    { type: 'regex', pattern: 'error' }
+  ];
+  const evalResults = evaluateAssertions(res, assertions);
+  assert.equal(evalResults[0].passed, true);
+  assert.equal(evalResults[1].passed, false);
+});
+
+test('QA Assertions - evaluates jsonSchema required fields', () => {
+  const res = { status: 200, durationMs: 20, body: JSON.stringify({ id: 42, name: 'Sample', nested: { active: true } }) };
+  const assertions = [
+    { type: 'jsonSchema', required: ['id', 'name', 'nested.active'] },
+    { type: 'jsonSchema', required: ['id', 'missingField'] }
+  ];
+  const evalResults = evaluateAssertions(res, assertions);
+  assert.equal(evalResults[0].passed, true);
+  assert.equal(evalResults[1].passed, false);
+});
+
+test('QA Assertions - evaluates status.in and jsonPath thresholds', () => {
+  const res = { status: 204, durationMs: 15, body: JSON.stringify({ count: 15 }) };
+  const assertions = [
+    { type: 'status', in: [200, 201, 204] },
+    { type: 'status', in: [400, 404] },
+    { type: 'jsonPath', path: 'count', greaterThan: 10 },
+    { type: 'jsonPath', path: 'count', lessThan: 5 },
+    { type: 'jsonPath', path: 'count', exists: true },
+    { type: 'jsonPath', path: 'missing', exists: false }
+  ];
+  const evalResults = evaluateAssertions(res, assertions);
+  assert.equal(evalResults[0].passed, true);
+  assert.equal(evalResults[1].passed, false);
+  assert.equal(evalResults[2].passed, true);
+  assert.equal(evalResults[3].passed, false);
+  assert.equal(evalResults[4].passed, true);
+  assert.equal(evalResults[5].passed, true);
+});
+
+// ─── 14. CLI Bench Command QA Tests ───────────────────────────────────
+
+test('QA CLI - bench command requires safety ownership flag', () => {
+  const res = runCLI(['bench', 'http://127.0.0.1:8080/fast']);
+  assert.equal(res.status, 1);
+  assert.match(res.stderr, /Missing required safety flag: --i-own-this-target/);
+});
+
+test('QA CLI - bench command validates target URL', () => {
+  const res = runCLI(['bench', '--i-own-this-target']);
+  assert.equal(res.status, 1);
+  assert.match(res.stderr, /bench requires a target URL/);
+});
+
 
 

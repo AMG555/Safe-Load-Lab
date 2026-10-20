@@ -597,6 +597,9 @@
       </nav>
 
       <div class="header-actions">
+        <a href="/metrics" target="_blank" class="btn btn-secondary btn-sm" style="font-family:var(--font-mono);text-decoration:none;display:inline-flex;align-items:center;gap:4px;" title="Prometheus / OpenMetrics Live Scraping Endpoint">
+          <span>📊</span> /metrics
+        </a>
         <div class="mock-pill" title="Local hermetic mock server for zero-flake load tests">
           <div class="status-dot" id="mockDot"></div>
           <span id="mockLabel" style="font-family:var(--font-mono);font-weight:600;">Mock :8080</span>
@@ -1036,8 +1039,8 @@
             </div>
           </div>
 
-          <!-- Postman & OpenAPI Import -->
-          <div class="form-row">
+          <!-- Postman, OpenAPI & HAR Import -->
+          <div class="form-row" style="grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));">
             <div>
               <label>Postman Collection (JSON)</label>
               <textarea id="postmanInput" rows="4" style="font-family:var(--font-mono);font-size:12px;" placeholder="Paste Postman Collection v2/v2.1 JSON here..."></textarea>
@@ -1047,6 +1050,11 @@
               <label>OpenAPI / Swagger Spec (JSON)</label>
               <textarea id="openApiInput" rows="4" style="font-family:var(--font-mono);font-size:12px;" placeholder="Paste OpenAPI 3.0 or Swagger 2.0 JSON here..."></textarea>
               <button class="btn btn-secondary btn-sm" style="margin-top:6px;" onclick="importOpenApiJson()">Import OpenAPI Spec</button>
+            </div>
+            <div>
+              <label>Browser HAR Recording (JSON)</label>
+              <textarea id="harInput" rows="4" style="font-family:var(--font-mono);font-size:12px;" placeholder="Paste DevTools Network HAR JSON here..."></textarea>
+              <button class="btn btn-secondary btn-sm" style="margin-top:6px;" onclick="importHarJson()">Import Browser HAR</button>
             </div>
           </div>
 
@@ -2312,6 +2320,29 @@
         if (config.endpoints?.[0]?.url) document.getElementById('targetUrl').value = config.endpoints[0].url;
         switchNav('workbench');
         appendConsole(`[IMPORT] Successfully imported ${config.endpoints.length} endpoints from OpenAPI Spec.\n`);
+      });
+    }
+
+    function importHarJson() {
+      const content = document.getElementById('harInput').value.trim();
+      if (!content) { alert('Please paste Browser HAR JSON'); return; }
+
+      fetch('/api/import/har', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content })
+      })
+      .then(r => r.json())
+      .then(config => {
+        if (config.error) { alert('HAR Import Error: ' + config.error); return; }
+        document.getElementById('advancedJsonBox').style.display = 'block';
+        document.getElementById('advancedJsonText').value = JSON.stringify(config, null, 2);
+        if (config.endpoints?.[0]?.url) document.getElementById('targetUrl').value = config.endpoints[0].url;
+        switchNav('workbench');
+        appendConsole(`[IMPORT] Successfully imported ${config.endpoints.length} endpoints from HAR Recording.\n`);
+      })
+      .catch(err => {
+        alert('Network error importing HAR: ' + err.message);
       });
     }
 

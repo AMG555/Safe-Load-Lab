@@ -143,4 +143,37 @@ test('UI Server API Suite', async (t) => {
     assert.match(data.yaml, /name: Safe Load Lab/);
     assert.match(data.yaml, /--config test\.json/);
   });
+
+  await t.test('POST /api/import/har converts HAR recording into load test config', async () => {
+    const sampleHar = {
+      log: {
+        version: '1.2',
+        entries: [
+          { request: { method: 'GET', url: 'http://127.0.0.1:8080/api/items' } },
+          { request: { method: 'GET', url: 'http://127.0.0.1:8080/styles.css' } }
+        ]
+      }
+    };
+    const { status, data } = await requestJson('/api/import/har', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: JSON.stringify(sampleHar), duration: 20, concurrency: 4, rps: 8 })
+    });
+    assert.equal(status, 200);
+    assert.equal(data.durationSeconds, 20);
+    assert.equal(data.concurrency, 4);
+    assert.equal(data.rps, 8);
+    assert.equal(data.endpoints.length, 1); // css filtered out
+    assert.equal(data.endpoints[0].url, 'http://127.0.0.1:8080/api/items');
+  });
+
+  await t.test('GET /metrics returns OpenMetrics Prometheus exposition text', async () => {
+    const res = await fetch(`http://127.0.0.1:${port}/metrics`);
+    assert.equal(res.status, 200);
+    const text = await res.text();
+    assert.match(text, /# HELP safeloadlab_uptime_seconds/);
+    assert.match(text, /safeloadlab_uptime_seconds \d+/);
+    assert.match(text, /# HELP safeloadlab_active_test/);
+    assert.match(text, /safeloadlab_mock_running/);
+  });
 });
