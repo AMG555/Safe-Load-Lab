@@ -21,6 +21,7 @@
     "test:performance": "node --test tests/performance.test.mjs",
     "test:integration": "node --test tests/integration.test.mjs",
     "test:smoke": "node --test tests/smoke.test.mjs",
+    "test:ui": "node --test tests/ui.test.mjs",
     "test:all": "node --test tests/*.test.mjs",
     "lint": "eslint . --ext .js",
     "lint:fix": "eslint . --ext .js --fix"

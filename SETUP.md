@@ -32,22 +32,17 @@ Recommended version:
 Node.js 20 LTS or newer
 ```
 
-## 2. Does this require an LLM?
+## 2. Architecture & Dependencies
 
-No.
+Safe Load Lab is completely self-contained. It requires zero cloud accounts, external SaaS subscriptions, or third-party API keys. All testing logic, concurrency scheduling, and reporting execute directly on your local Node.js runtime.
 
-Safe Load Lab does **not** require:
+Safe Load Lab operates independently with:
+- Zero external SaaS dependencies
+- Zero third-party network egress during testing
+- Zero cloud subscription lock-in
+- Local hermetic mock server for offline verification
 
-- OpenAI API key
-- Claude API key
-- Gemini API key
-- any LLM model
-- any AI service
-- external database
-- cloud service
-- paid subscription
-
-It runs locally using Node.js and sends HTTP requests to your own application.
+It runs locally using Node.js and sends HTTP requests directly to your own specified application target.
 
 ## 3. Install globally
 

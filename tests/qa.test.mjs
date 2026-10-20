@@ -15,7 +15,10 @@ import {
   computeAbDiff,
   generateMarkdownReport,
   generateAbMarkdownReport,
-  HARD_LIMITS
+  HARD_LIMITS,
+  parseCsvData,
+  probeEndpoint,
+  generateCiWorkflow
 } from '../bin/safe-load-lab.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -308,4 +311,156 @@ test('QA Markdown - generateAbMarkdownReport formats differential comparisons', 
   assert.ok(md.includes('Variant B'));
   assert.ok(md.includes('🏆 **Variant B is the WINNER**'));
 });
+
+// ─── 7. CSV Data Parser QA Tests ──────────────────────────────────────
+
+test('QA CSV Parser - parses standard comma-delimited data', () => {
+  const csv = `id,name,role\n1,Alice,admin\n2,Bob,user\n3,Charlie,guest`;
+  const rows = parseCsvData(csv);
+  assert.equal(rows.length, 3);
+  assert.equal(rows[0].id, '1');
+  assert.equal(rows[0].name, 'Alice');
+  assert.equal(rows[0].role, 'admin');
+  assert.equal(rows[2].name, 'Charlie');
+});
+
+test('QA CSV Parser - handles quoted values and commas within quotes', () => {
+  const csv = `id,title,query\n101,"Senior Engineer, Core","latency, p95"\n102,"QA Specialist","error rate"`;
+  const rows = parseCsvData(csv);
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].title, 'Senior Engineer, Core');
+  assert.equal(rows[0].query, 'latency, p95');
+});
+
+test('QA CSV Parser - handles tab and semicolon delimiters', () => {
+  const tabCsv = `id\ttoken\tscore\n1\tabc\t99\n2\tdef\t88`;
+  const tabRows = parseCsvData(tabCsv);
+  assert.equal(tabRows.length, 2);
+  assert.equal(tabRows[0].token, 'abc');
+
+  const semiCsv = `id;path;tag\n1;/items;test\n2;/users;prod`;
+  const semiRows = parseCsvData(semiCsv);
+  assert.equal(semiRows.length, 2);
+  assert.equal(semiRows[1].path, '/users');
+});
+
+// ─── 8. Preflight Probe Engine QA Tests ───────────────────────────────
+
+test('QA Probe - sends single preflight probe and validates status & assertions', async () => {
+  const port = 4120;
+  const server = startMockServer(port, '127.0.0.1');
+  try {
+    const probe = await probeEndpoint({
+      url: `http://127.0.0.1:${port}/json`,
+      method: 'GET',
+      assertions: [
+        { type: 'status', value: 200 },
+        { type: 'jsonPath', path: 'meta.total', equals: 2 }
+      ]
+    });
+
+    assert.equal(probe.status, 200);
+    assert.equal(probe.passed, true);
+    assert.ok(probe.durationMs >= 0);
+    assert.ok(probe.headers['content-type']);
+    assert.equal(probe.assertions.length, 2);
+    assert.equal(probe.assertions[0].passed, true);
+    assert.equal(probe.assertions[1].passed, true);
+  } finally {
+    server.close();
+  }
+});
+
+test('QA Probe - returns failed status on error route', async () => {
+  const port = 4121;
+  const server = startMockServer(port, '127.0.0.1');
+  try {
+    const probe = await probeEndpoint({
+      url: `http://127.0.0.1:${port}/error?status=500`,
+      method: 'GET'
+    });
+    assert.equal(probe.status, 500);
+    assert.equal(probe.passed, false);
+  } finally {
+    server.close();
+  }
+});
+
+// ─── 9. CI/CD Workflow Generator QA Tests ─────────────────────────────
+
+test('QA CI/CD Generator - produces valid GitHub Actions workflow', () => {
+  const yaml = generateCiWorkflow('github', { config: 'load-test.json', cron: '0 3 * * *' });
+  assert.match(yaml, /name: Safe Load Lab/);
+  assert.match(yaml, /cron: '0 3 \* \* \*'/);
+  assert.match(yaml, /--config load-test\.json/);
+  assert.match(yaml, /mikepenz\/action-junit-report/);
+});
+
+test('QA CI/CD Generator - produces valid GitLab CI workflow', () => {
+  const yaml = generateCiWorkflow('gitlab', { config: 'load-test.json' });
+  assert.match(yaml, /stages:\n  - test\n  - performance/);
+  assert.match(yaml, /load-test:/);
+  assert.match(yaml, /reports:\n      junit: reports\/junit\.xml/);
+});
+
+// ─── 10. New Mock Server Routes QA Tests ──────────────────────────────
+
+test('QA Mock Server - handles /auth with and without Bearer token', async () => {
+  const port = 4122;
+  const server = startMockServer(port, '127.0.0.1');
+  try {
+    // Without token: 401
+    const unauth = await fetch(`http://127.0.0.1:${port}/auth`);
+    assert.equal(unauth.status, 401);
+
+    // With token: 200
+    const authed = await fetch(`http://127.0.0.1:${port}/auth`, {
+      headers: { Authorization: 'Bearer test-token-123' }
+    });
+    assert.equal(authed.status, 200);
+    const body = await authed.json();
+    assert.equal(body.authenticated, true);
+    assert.equal(body.token, 'test-token-123');
+  } finally {
+    server.close();
+  }
+});
+
+test('QA Mock Server - handles in-memory /items CRUD', async () => {
+  const port = 4123;
+  const server = startMockServer(port, '127.0.0.1');
+  try {
+    const listRes = await fetch(`http://127.0.0.1:${port}/items`);
+    assert.equal(listRes.status, 200);
+    const list = await listRes.json();
+    assert.ok(Array.isArray(list.items));
+
+    const postRes = await fetch(`http://127.0.0.1:${port}/items`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'New Widget' })
+    });
+    assert.equal(postRes.status, 201);
+    const created = await postRes.json();
+    assert.equal(created.name, 'New Widget');
+    assert.ok(created.id);
+  } finally {
+    server.close();
+  }
+});
+
+// ─── 11. CLI Commands Probe & CI QA Tests ─────────────────────────────
+
+test('QA CLI - probe command validates arguments when missing target', () => {
+  const res = runCLI(['probe']);
+  assert.equal(res.status, 1);
+  assert.match(res.stderr, /probe requires --url <url>, --config <file>, or --curl/);
+});
+
+test('QA CLI - ci command outputs workflow yaml', () => {
+  const res = runCLI(['ci', '--type', 'github']);
+  assert.equal(res.status, 0);
+  assert.match(res.stdout, /Safe Load Lab/);
+});
+
 

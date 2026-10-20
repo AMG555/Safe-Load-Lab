@@ -181,20 +181,24 @@ Usage:
   sll mock --port 8080
 
 Commands:
-  run         Run a controlled load test
-  ab, diff    Run A/B differential load test comparing two endpoints or configs
-  mock        Start hermetic local mock server for zero-flake load testing
-  import-curl Convert cURL command string to Safe Load Lab test config
-  validate    Validate and normalize a config without sending traffic
-  plan        Show resolved test plan without sending traffic
-  sample      Create a sample config file
-  rate-limit  Safe rate-limit verification for owned endpoints
-  compare     Compare two test reports
-  spike       Run a spike test (sudden traffic increase)
-  soak        Run a soak test (sustained load over time)
-  stress      Run a stress test (gradually increasing load)
-  version     Show version
-  help        Show help
+  run             Run a controlled load test
+  probe, ping     Send single preflight probe to verify target status, latency, & assertions
+  ci              Generate CI/CD pipeline workflow (GitHub Actions or GitLab CI)
+  ab, diff        Run A/B differential load test comparing two endpoints or configs
+  mock            Start hermetic local mock server for zero-flake load testing
+  import-curl     Convert cURL command string to Safe Load Lab test config
+  import-postman  Convert Postman Collection JSON to Safe Load Lab test config
+  import-openapi  Convert OpenAPI/Swagger JSON to Safe Load Lab test config
+  validate        Validate and normalize a config without sending traffic
+  plan            Show resolved test plan without sending traffic
+  sample          Create a sample config file
+  rate-limit      Safe rate-limit verification for owned endpoints
+  compare         Compare two test reports
+  spike           Run a spike test (sudden traffic increase)
+  soak            Run a soak test (sustained load over time)
+  stress          Run a stress test (gradually increasing load)
+  version         Show version
+  help            Show help
 
 Required safety flag for run/ab/rate-limit/spike/soak/stress:
   --i-own-this-target       Confirms you own or have explicit permission to test the target
@@ -206,16 +210,22 @@ Common options:
   --method <GET|POST|...>   HTTP method, default GET
   --body <json/string>      Request body for simple test
   --header "K: V"           Header, repeatable
+  --data <file>             CSV data feed file for parameterization ({{data.column}})
+  --data-mode <mode>        Data selection: round-robin (default) or random
   --duration <seconds>      Test duration, max ${HARD_LIMITS.maxDurationSeconds}, default 30
   --concurrency <number>    Max concurrent workers, max ${HARD_LIMITS.maxConcurrency}, default 5
   --rps <number>            Max requests per second, max ${HARD_LIMITS.maxRps}, default 10
   --timeout <ms>            Request timeout, default 10000
+  --jitter <ms>             Add random delay jitter (0-ms) for realistic distribution
+  --env-file <file>         Load environment variables from .env file (default .env if exists)
   --out <file>              Save JSON report, default reports/report-<timestamp>.json
   --csv <file>              Save per-request CSV
   --html <file>             Save standalone HTML report
   --markdown <file>         Save markdown format report
   --md <file>               Alias for --markdown
   --junit <file>            Save JUnit XML summary for CI
+  --prometheus <file>       Save OpenMetrics / Prometheus exposition text report
+  --badge <file>            Save SVG status & latency badge for README
   --env <name>              Use config environment profile
   --webhook <url>           Send results to webhook URL
   --slack <url>             Send results to Slack webhook
@@ -307,10 +317,81 @@ function setByPath(obj, dottedPath, value) {
   cur[parts.at(-1)] = value;
 }
 
+function loadEnvFile(filePath = '.env') {
+  if (!fs.existsSync(filePath)) return {};
+  const content = fs.readFileSync(filePath, 'utf8');
+  const env = {};
+  for (const line of content.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eqIdx = trimmed.indexOf('=');
+    if (eqIdx !== -1) {
+      const key = trimmed.slice(0, eqIdx).trim();
+      let val = trimmed.slice(eqIdx + 1).trim();
+      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+        val = val.slice(1, -1);
+      }
+      env[key] = val;
+      if (process.env[key] === undefined) process.env[key] = val;
+    }
+  }
+  return env;
+}
+
+function parseCsvData(content) {
+  if (!content || typeof content !== 'string') return [];
+  const lines = content.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#'));
+  if (lines.length < 2) return [];
+
+  const firstLine = lines[0];
+  let delimiter = ',';
+  if (firstLine.includes('\t')) delimiter = '\t';
+  else if (firstLine.includes(';') && !firstLine.includes(',')) delimiter = ';';
+
+  function parseLine(line) {
+    const row = [];
+    let inQuotes = false;
+    let cur = '';
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (c === '"') {
+        if (inQuotes && line[i + 1] === '"') {
+          cur += '"';
+          i++;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (c === delimiter && !inQuotes) {
+        row.push(cur.trim());
+        cur = '';
+      } else {
+        cur += c;
+      }
+    }
+    row.push(cur.trim());
+    return row;
+  }
+
+  const rawHeaders = parseLine(lines[0]);
+  const headers = rawHeaders.map(h => h.replace(/^["']|["']$/g, '').trim());
+  const rows = [];
+  for (let i = 1; i < lines.length; i++) {
+    const values = parseLine(lines[i]);
+    const obj = {};
+    for (let j = 0; j < headers.length; j++) {
+      let val = values[j] ?? '';
+      if (val.startsWith('"') && val.endsWith('"')) val = val.slice(1, -1);
+      obj[headers[j]] = val;
+    }
+    rows.push(obj);
+  }
+  return rows;
+}
+
 function renderTemplate(value, vars) {
   if (typeof value === 'string') {
     return value.replace(/\{\{\s*([\w.:-]+)\s*\}\}/g, (_, key) => {
-      const v = getByPath(vars, key);
+      const v = getByPath(vars, key) ?? process.env[key];
       return v == null ? '' : String(v);
     });
   }
@@ -441,8 +522,127 @@ function parseCurlCommand(curlStr) {
   };
 }
 
+function parsePostmanCollection(content, options = {}) {
+  const collection = typeof content === 'string' ? JSON.parse(content) : content;
+  if (!collection.item && !collection.items) throw new Error('Invalid Postman Collection: missing item array');
+
+  function extractItems(items, out = []) {
+    for (const it of items || []) {
+      if (it.item) extractItems(it.item, out);
+      else if (it.request) out.push(it);
+    }
+    return out;
+  }
+
+  const rawItems = extractItems(collection.item || collection.items);
+  if (!rawItems.length) throw new Error('No valid requests found in Postman Collection');
+
+  const endpoints = rawItems.map((it, idx) => {
+    let url = '';
+    if (typeof it.request.url === 'string') {
+      url = it.request.url;
+    } else if (it.request.url?.raw) {
+      url = it.request.url.raw;
+    } else if (Array.isArray(it.request.url?.path)) {
+      const host = Array.isArray(it.request.url?.host) ? it.request.url.host.join('.') : (it.request.url?.host || 'localhost');
+      const proto = it.request.url?.protocol || 'http';
+      url = `${proto}://${host}/${it.request.url.path.join('/')}`;
+    }
+
+    const method = (it.request.method || 'GET').toUpperCase();
+    const headers = {};
+    for (const h of it.request.header || []) {
+      if (h.key && !h.disabled) headers[h.key] = h.value || '';
+    }
+
+    let body = null;
+    if (it.request.body?.raw) {
+      body = it.request.body.raw;
+    } else if (it.request.body?.urlencoded) {
+      body = it.request.body.urlencoded.map(p => `${encodeURIComponent(p.key)}=${encodeURIComponent(p.value)}`).join('&');
+      headers['Content-Type'] ||= 'application/x-www-form-urlencoded';
+    }
+
+    return {
+      name: it.name || `request-${idx + 1}`,
+      url: url || 'http://localhost:8080',
+      method,
+      headers,
+      body,
+      weight: 1
+    };
+  });
+
+  return {
+    name: collection.info?.name ? collection.info.name.toLowerCase().replace(/[^a-z0-9_-]/g, '-') : 'postman-load-test',
+    durationSeconds: Number(options.duration || 30),
+    concurrency: Number(options.concurrency || 5),
+    rps: Number(options.rps || 10),
+    timeoutMs: Number(options.timeout || 10000),
+    endpoints
+  };
+}
+
+function parseOpenApiSpec(content, options = {}) {
+  const spec = typeof content === 'string' ? JSON.parse(content) : content;
+  if (!spec.paths) throw new Error('Invalid OpenAPI/Swagger spec: missing paths');
+
+  let baseUrl = options.baseUrl || '';
+  if (!baseUrl) {
+    if (Array.isArray(spec.servers) && spec.servers[0]?.url) {
+      baseUrl = spec.servers[0].url;
+    } else if (spec.host) {
+      const proto = (spec.schemes && spec.schemes[0]) || 'http';
+      baseUrl = `${proto}://${spec.host}${spec.basePath || ''}`;
+    } else {
+      baseUrl = 'http://localhost:8080';
+    }
+  }
+  baseUrl = baseUrl.replace(/\/$/, '');
+
+  const endpoints = [];
+  const validMethods = ['get', 'post', 'put', 'delete', 'patch', 'head', 'options'];
+
+  for (const [routePath, pathItem] of Object.entries(spec.paths)) {
+    for (const [method, op] of Object.entries(pathItem)) {
+      if (!validMethods.includes(method.toLowerCase()) || !op || typeof op !== 'object') continue;
+
+      const normalizedPath = routePath.replace(/\{([^}]+)\}/g, '1');
+      const url = `${baseUrl}${normalizedPath.startsWith('/') ? '' : '/'}${normalizedPath}`;
+      const headers = {};
+
+      let body = null;
+      if (op.requestBody?.content?.['application/json']) {
+        headers['Content-Type'] = 'application/json';
+        body = '{}';
+      }
+
+      endpoints.push({
+        name: op.summary || op.operationId || `${method.toUpperCase()} ${routePath}`,
+        url,
+        method: method.toUpperCase(),
+        headers,
+        body,
+        weight: 1
+      });
+    }
+  }
+
+  if (!endpoints.length) throw new Error('No HTTP endpoints found in OpenAPI specification');
+
+  return {
+    name: spec.info?.title ? `${spec.info.title.toLowerCase().replace(/[^a-z0-9_-]/g, '-')}-load-test` : 'openapi-load-test',
+    durationSeconds: Number(options.duration || 30),
+    concurrency: Number(options.concurrency || 5),
+    rps: Number(options.rps || 10),
+    timeoutMs: Number(options.timeout || 10000),
+    endpoints
+  };
+}
+
 function startMockServer(port = 8080, host = '127.0.0.1') {
   const requestHistory = new Map(); // ip -> [timestamps]
+  const mockItems = [{ id: 1, name: 'Item 1' }, { id: 2, name: 'Item 2' }];
 
   const server = http.createServer((req, res) => {
     const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
@@ -530,6 +730,51 @@ function startMockServer(port = 8080, host = '127.0.0.1') {
       return;
     }
 
+    if (pathname === '/auth') {
+      const authHeader = req.headers['authorization'];
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ authenticated: true, token: authHeader.slice(7), user: 'mock-user' }));
+      } else {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ authenticated: false, error: 'Unauthorized: Bearer token required' }));
+      }
+      return;
+    }
+
+    if (pathname === '/flaky') {
+      const failRate = parseFloat(parsedUrl.searchParams.get('failRate') || '0.3');
+      if (Math.random() < failRate) {
+        res.writeHead(503, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Service Unavailable (Simulated Flakiness)', status: 503 }));
+      } else {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', route: 'flaky' }));
+      }
+      return;
+    }
+
+    if (pathname === '/items') {
+      if (req.method === 'GET') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ items: mockItems, total: mockItems.length }));
+        return;
+      }
+      if (req.method === 'POST') {
+        let body = '';
+        req.on('data', chunk => { body += chunk; });
+        req.on('end', () => {
+          let parsed = {};
+          try { parsed = JSON.parse(body); } catch {}
+          const newItem = { id: mockItems.length + 1, ...parsed, createdAt: new Date().toISOString() };
+          mockItems.push(newItem);
+          res.writeHead(201, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(newItem));
+        });
+        return;
+      }
+    }
+
     if (pathname === '/json') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
@@ -613,8 +858,21 @@ function normalizeConfig(args) {
     timeoutMs: clampNumber(config.timeoutMs, 10000, 100, 120000, 'timeoutMs'),
     endpoints: config.endpoints || [],
     endpointTemplates: config.endpoints || [],
-    thresholds: config.thresholds || {}
+    thresholds: config.thresholds || {},
+    data: null,
+    dataMode: args['data-mode'] || config.dataMode || 'round-robin'
   };
+
+  const dataPath = args.data || config.dataFile;
+  if (dataPath) {
+    if (fs.existsSync(dataPath)) {
+      normalized.data = parseCsvData(fs.readFileSync(dataPath, 'utf8'));
+    } else {
+      throw new Error(`Data feed file not found: ${dataPath}`);
+    }
+  } else if (Array.isArray(config.data)) {
+    normalized.data = config.data;
+  }
 
   if (!Array.isArray(normalized.endpoints) || normalized.endpoints.length === 0) throw new Error('Config must contain at least one endpoint');
   normalized.endpoints = normalized.endpoints.map((ep, idx) => normalizeEndpoint(ep, idx, normalized.variables));
@@ -662,11 +920,47 @@ function summarize(results, startedAt, finishedAt, config) {
   const failed = results.filter(r => r.error || r.status >= 400 || r.status === 0).length;
   const byStatus = {};
   const byEndpoint = {};
+  const errorBreakdown = {
+    timeouts: 0,
+    connectionReset: 0,
+    http4xx: 0,
+    http5xx: 0,
+    other: 0,
+    samples: []
+  };
+
   for (const r of results) {
     byStatus[r.status || 'error'] = (byStatus[r.status || 'error'] || 0) + 1;
     byEndpoint[r.endpoint] ||= { total: 0, failed: 0, durations: [] };
     byEndpoint[r.endpoint].total++;
-    if (r.error || r.status >= 400 || r.status === 0) byEndpoint[r.endpoint].failed++;
+    const isFail = Boolean(r.error || r.status >= 400 || r.status === 0);
+    if (isFail) {
+      byEndpoint[r.endpoint].failed++;
+      const errStr = String(r.error || '');
+      if (r.error === 'timeout' || errStr.includes('ETIMEDOUT') || errStr.includes('timeout')) {
+        errorBreakdown.timeouts++;
+      } else if (errStr.includes('ECONNRESET') || errStr.includes('ECONNREFUSED')) {
+        errorBreakdown.connectionReset++;
+      } else if (r.status >= 400 && r.status < 500) {
+        errorBreakdown.http4xx++;
+      } else if (r.status >= 500) {
+        errorBreakdown.http5xx++;
+      } else {
+        errorBreakdown.other++;
+      }
+
+      if (errorBreakdown.samples.length < 5) {
+        errorBreakdown.samples.push({
+          endpoint: r.endpoint,
+          method: r.method,
+          url: r.url,
+          status: r.status,
+          durationMs: Number((r.durationMs || 0).toFixed(1)),
+          error: r.error || `HTTP ${r.status}`,
+          timestamp: r.timestamp
+        });
+      }
+    }
     if (Number.isFinite(r.durationMs)) byEndpoint[r.endpoint].durations.push(r.durationMs);
   }
   
@@ -712,6 +1006,7 @@ function summarize(results, startedAt, finishedAt, config) {
     latencyMs: { avg, min: durations.length ? Math.min(...durations) : 0, max: durations.length ? Math.max(...durations) : 0, p50: globalPercentiles[50], p90: globalPercentiles[90], p95: metrics.p95, p99: metrics.p99 },
     byStatus,
     byEndpoint: endpointSummary,
+    errorBreakdown,
     thresholds: evaluateThresholds(config.thresholds || {}, metrics),
     assertionFailures: Object.keys(assertionFailures).length > 0 ? assertionFailures : undefined
   };
@@ -951,6 +1246,155 @@ function evaluateAssertions(result, assertions = []) {
   return results;
 }
 
+async function probeEndpoint(epInput, timeoutMs = 10000) {
+  const vars = epInput.variables || {};
+  const ep = normalizeEndpoint(epInput, 0, vars);
+  const start = performance.now();
+  const res = await doRequest(ep, timeoutMs, true);
+  const durationMs = performance.now() - start;
+
+  let assertions = [];
+  if (ep.assertions && ep.assertions.length > 0) {
+    assertions = evaluateAssertions(res, ep.assertions);
+  }
+
+  const passed = (res.status >= 200 && res.status < 400) && (!assertions.length || assertions.every(a => a.passed));
+
+  return {
+    endpoint: ep.name,
+    url: ep.url,
+    method: ep.method,
+    status: res.status,
+    durationMs: Number(durationMs.toFixed(2)),
+    headers: res.headers || {},
+    body: res.body || '',
+    error: res.error,
+    assertions,
+    passed
+  };
+}
+
+function printProbeResult(result) {
+  console.log(chalk.bold('\n🔍 Safe Load Lab — Preflight Request Probe'));
+  console.log(chalk.gray('─'.repeat(60)));
+  console.log(`Endpoint: ${chalk.cyan(result.method)} ${result.url}`);
+  const statusColor = result.status >= 200 && result.status < 300 ? chalk.green : result.status >= 400 ? chalk.red : chalk.yellow;
+  console.log(`Status:   ${statusColor.bold(result.status || 'ERROR')} (${result.error || (result.status >= 200 && result.status < 400 ? 'OK' : 'FAIL')})`);
+  console.log(`Latency:  ${chalk.magenta(result.durationMs + 'ms')}`);
+  console.log(chalk.gray('\nResponse Headers:'));
+  for (const [k, v] of Object.entries(result.headers)) {
+    console.log(`  ${chalk.gray(k)}: ${v}`);
+  }
+  if (result.assertions && result.assertions.length) {
+    console.log(chalk.gray('\nAssertions:'));
+    for (const a of result.assertions) {
+      const icon = a.passed ? chalk.green('✓') : chalk.red('✗');
+      console.log(`  ${icon} ${a.type}: ${a.message}`);
+    }
+  }
+  console.log(chalk.gray('\nResponse Body Preview:'));
+  try {
+    const parsed = JSON.parse(result.body);
+    console.log(JSON.stringify(parsed, null, 2).slice(0, 1500));
+  } catch {
+    console.log((result.body || '').slice(0, 1000));
+  }
+  console.log(chalk.gray('─'.repeat(60)));
+  if (result.passed) {
+    console.log(chalk.bold.green('✓ Probe Passed: Target responded within acceptable criteria.\n'));
+  } else {
+    console.log(chalk.bold.red('✗ Probe Failed: Target returned error status or assertion failed.\n'));
+  }
+}
+
+function generateCiWorkflow(type = 'github', options = {}) {
+  const configFile = options.config || 'load-test.json';
+  const cron = options.cron || '0 2 * * *';
+
+  if (type === 'gitlab') {
+    return `# GitLab CI - Safe Load Lab Performance Pipeline
+stages:
+  - test
+  - performance
+
+load-test:
+  stage: performance
+  image: node:20-alpine
+  script:
+    - npx --yes safe-load-lab run --config ${configFile} --i-own-this-target --junit reports/junit.xml --markdown reports/summary.md
+  artifacts:
+    when: always
+    paths:
+      - reports/
+    reports:
+      junit: reports/junit.xml
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+`;
+  }
+
+  return `name: Safe Load Lab SLA & Performance CI
+
+on:
+  pull_request:
+    branches: [main, master]
+  schedule:
+    - cron: '${cron}'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  checks: write
+  pull-requests: write
+
+jobs:
+  load-test:
+    name: Safe Load Lab Automated SLA Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Execute Controlled Load Test
+        id: load_test
+        run: |
+          npx --yes safe-load-lab run \\
+            --config ${configFile} \\
+            --i-own-this-target \\
+            --junit reports/junit.xml \\
+            --markdown reports/summary.md \\
+            --badge reports/badge.svg
+        env:
+          GITHUB_STEP_SUMMARY: \${{ github.step_summary }}
+
+      - name: Upload Test Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: safe-load-lab-reports
+          path: reports/
+          retention-days: 14
+
+      - name: Publish JUnit SLA Results
+        if: always()
+        uses: mikepenz/action-junit-report@v4
+        with:
+          report_paths: 'reports/junit.xml'
+          check_name: 'Safe Load Lab SLA Test Results'
+          fail_on_failure: true
+`;
+}
+
 async function runSetup(config) {
   if (!config.setup?.length) return;
   console.log(`Running ${config.setup.length} setup step(s)...`);
@@ -985,9 +1429,12 @@ async function runTest(config) {
   await runSetup(config);
   const startedAt = Date.now();
   const stopAt = startedAt + config.durationSeconds * 1000;
+  const dataRows = Array.isArray(config.data) && config.data.length ? config.data : null;
+  let dataRowIndex = 0;
   
   console.log(chalk.bold.cyan(`\n🚀 Starting: ${config.name}${config.activeEnv ? chalk.gray(' [' + config.activeEnv + ']') : ''}`));
   console.log(`Duration: ${chalk.yellow(config.durationSeconds + 's')} | Max concurrency: ${chalk.yellow(config.concurrency)} | Max RPS cap: ${chalk.yellow(config.rps)}`);
+  if (dataRows) console.log(chalk.gray(`Data feed: ${chalk.cyan(dataRows.length)} rows (${config.dataMode || 'round-robin'})`));
   if (config.stages.length > 1) console.log('Stages:', config.stages.map(s => `${chalk.cyan(s.name)}:${s.durationSeconds}s/${s.concurrency}c/${s.rps}rps`).join(' → '));
   console.log(chalk.gray('Press Ctrl+C to stop early.\n'));
   
@@ -1026,13 +1473,33 @@ async function runTest(config) {
     const shouldLaunch = timeSinceLastLaunch >= targetInterval;
     
     if (shouldLaunch && active < stage.concurrency) {
-      const ep = pickEndpoint(config.endpoints);
+      let ep;
+      if (dataRows && dataRows.length > 0) {
+        const epTemplate = pickEndpoint(config.endpointTemplates || config.endpoints);
+        const row = config.dataMode === 'random'
+          ? dataRows[Math.floor(Math.random() * dataRows.length)]
+          : dataRows[dataRowIndex % dataRows.length];
+        dataRowIndex++;
+        const iterVars = { ...(config.variables || {}), data: row };
+        ep = normalizeEndpoint(epTemplate, 0, iterVars);
+      } else {
+        ep = pickEndpoint(config.endpoints);
+      }
       active++; launched++; requestCounter++;
       lastLaunch = now;
       
       // Use retry logic if configured
       const retryConfig = config.retry || { enabled: true, maxAttempts: 3 };
-      doRequestWithRetry(ep, config.timeoutMs, retryConfig, false)
+      const jitterMs = Number(config.jitterMs || config.jitter || 0);
+
+      const sendReq = async () => {
+        if (jitterMs > 0) {
+          await new Promise(r => setTimeout(r, Math.random() * jitterMs));
+        }
+        return doRequestWithRetry(ep, config.timeoutMs, retryConfig, false);
+      };
+
+      sendReq()
         .then(r => results.push(r))
         .finally(() => active--);
       
@@ -1197,6 +1664,18 @@ ${Object.entries(summary.thresholds || {}).map(([name, check]) => `
   - Expected: ${check.expected}
 `).join('\n') || 'No thresholds configured'}
 
+${summary.errorBreakdown && summary.totals.failed > 0 ? `
+## Error Breakdown
+
+| Category | Count |
+|----------|-------|
+| Timeouts | ${summary.errorBreakdown.timeouts} |
+| HTTP 5xx | ${summary.errorBreakdown.http5xx} |
+| HTTP 4xx | ${summary.errorBreakdown.http4xx} |
+| Connection Drops | ${summary.errorBreakdown.connectionReset} |
+| Other | ${summary.errorBreakdown.other} |
+` : ''}
+
 ${summary.assertionFailures && Object.keys(summary.assertionFailures).length > 0 ? `
 ## Assertion Failures
 
@@ -1218,6 +1697,54 @@ function writeMarkdownReport(filePath, summary) {
   ensureDirFor(filePath);
   const md = generateMarkdownReport(summary);
   fs.writeFileSync(filePath, md);
+}
+
+function generatePrometheusMetrics(summary, results = []) {
+  const lines = [];
+  const testName = String(summary.testName || 'load-test').replace(/[^a-zA-Z0-9_-]/g, '_');
+
+  lines.push('# HELP safe_load_lab_requests_total Total HTTP requests made');
+  lines.push('# TYPE safe_load_lab_requests_total counter');
+  for (const [status, count] of Object.entries(summary.byStatus || {})) {
+    lines.push(`safe_load_lab_requests_total{status="${status}",test="${testName}"} ${count}`);
+  }
+
+  lines.push('# HELP safe_load_lab_achieved_rps Achieved requests per second');
+  lines.push('# TYPE safe_load_lab_achieved_rps gauge');
+  lines.push(`safe_load_lab_achieved_rps{test="${testName}"} ${(summary.totals?.achievedRps || 0).toFixed(2)}`);
+
+  lines.push('# HELP safe_load_lab_error_rate Ratio of failed requests');
+  lines.push('# TYPE safe_load_lab_error_rate gauge');
+  lines.push(`safe_load_lab_error_rate{test="${testName}"} ${(summary.totals?.errorRate || 0).toFixed(4)}`);
+
+  lines.push('# HELP safe_load_lab_latency_seconds Latency percentiles in seconds');
+  lines.push('# TYPE safe_load_lab_latency_seconds summary');
+  lines.push(`safe_load_lab_latency_seconds{test="${testName}",quantile="0.50"} ${((summary.latencyMs?.p50 || 0) / 1000).toFixed(4)}`);
+  lines.push(`safe_load_lab_latency_seconds{test="${testName}",quantile="0.90"} ${((summary.latencyMs?.p90 || 0) / 1000).toFixed(4)}`);
+  lines.push(`safe_load_lab_latency_seconds{test="${testName}",quantile="0.95"} ${((summary.latencyMs?.p95 || 0) / 1000).toFixed(4)}`);
+  lines.push(`safe_load_lab_latency_seconds{test="${testName}",quantile="0.99"} ${((summary.latencyMs?.p99 || 0) / 1000).toFixed(4)}`);
+
+  return lines.join('\n') + '\n';
+}
+
+function generateSvgBadge(summary) {
+  const isPassed = !Object.values(summary.thresholds || {}).some(t => !t.pass) && (summary.totals?.errorRate || 0) < 0.05;
+  const statusText = isPassed ? `pass | p95: ${(summary.latencyMs?.p95 || 0).toFixed(0)}ms` : `fail | err: ${((summary.totals?.errorRate || 0) * 100).toFixed(1)}%`;
+  const color = isPassed ? '#10b981' : '#ef4444';
+  const width = 160;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="20" role="img" aria-label="load-test: ${statusText}">
+  <linearGradient id="b" x2="0" y2="100%"><stop offset="0" stop-color="#bbb" stop-opacity=".1"/><stop offset="1" stop-opacity=".1"/></linearGradient>
+  <clipPath id="a"><rect width="${width}" height="20" rx="3" fill="#fff"/></clipPath>
+  <g clip-path="url(#a)">
+    <rect width="65" height="20" fill="#1e293b"/>
+    <rect x="65" width="${width - 65}" height="20" fill="${color}"/>
+    <rect width="${width}" height="20" fill="url(#b)"/>
+  </g>
+  <g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="11">
+    <text x="32.5" y="14">load-test</text>
+    <text x="${65 + (width - 65) / 2}" y="14">${statusText}</text>
+  </g>
+</svg>`;
 }
 
 /**
@@ -1309,6 +1836,19 @@ function printSummary(summary) {
                        statusNum >= 200 && statusNum < 300 ? chalk.green :
                        statusNum >= 400 ? chalk.red : chalk.yellow;
     console.log(`  ${statusColor(status)}: ${count}`);
+  }
+
+  if (summary.errorBreakdown && summary.totals.failed > 0) {
+    const eb = summary.errorBreakdown;
+    const parts = [];
+    if (eb.timeouts > 0) parts.push(`${eb.timeouts} timeouts`);
+    if (eb.http5xx > 0) parts.push(`${eb.http5xx} HTTP 5xx`);
+    if (eb.http4xx > 0) parts.push(`${eb.http4xx} HTTP 4xx`);
+    if (eb.connectionReset > 0) parts.push(`${eb.connectionReset} conn drops`);
+    if (eb.other > 0) parts.push(`${eb.other} other`);
+    if (parts.length) {
+      console.log(chalk.gray('\nFailure Breakdown: ') + chalk.yellow(parts.join(', ')));
+    }
   }
   
   const thresholdEntries = Object.entries(summary.thresholds || {});
@@ -1876,6 +2416,65 @@ async function main() {
     }
     return;
   }
+  if (command === 'import-postman') {
+    const file = args._[1] || args.file;
+    if (!file) throw new Error('import-postman requires a JSON file path: sll import-postman <file.json>');
+    const content = fs.readFileSync(file, 'utf8');
+    const configOut = parsePostmanCollection(content, args);
+    if (args.out) {
+      ensureDirFor(args.out);
+      fs.writeFileSync(args.out, JSON.stringify(configOut, null, 2));
+      console.log(chalk.green(`✓ Converted Postman Collection to ${args.out} (${configOut.endpoints.length} endpoints)`));
+    } else {
+      console.log(JSON.stringify(configOut, null, 2));
+    }
+    return;
+  }
+  if (command === 'import-openapi' || command === 'import-swagger') {
+    const file = args._[1] || args.file;
+    if (!file) throw new Error('import-openapi requires an OpenAPI/Swagger JSON file path: sll import-openapi <file.json>');
+    const content = fs.readFileSync(file, 'utf8');
+    const configOut = parseOpenApiSpec(content, args);
+    if (args.out) {
+      ensureDirFor(args.out);
+      fs.writeFileSync(args.out, JSON.stringify(configOut, null, 2));
+      console.log(chalk.green(`✓ Converted OpenAPI Spec to ${args.out} (${configOut.endpoints.length} endpoints)`));
+    } else {
+      console.log(JSON.stringify(configOut, null, 2));
+    }
+    return;
+  }
+  if (command === 'probe' || command === 'ping') {
+    let ep;
+    if (args.curl) {
+      ep = parseCurlCommand(args.curl);
+    } else if (args.config) {
+      const cfg = JSON.parse(fs.readFileSync(args.config, 'utf8'));
+      ep = cfg.endpoints?.[0];
+      if (!ep) throw new Error('Config contains no endpoints to probe');
+      ep.variables = cfg.variables || {};
+    } else if (args.url) {
+      ep = { url: args.url, method: args.method || 'GET', headers: parseHeaders(args.header), body: args.body };
+    } else {
+      throw new Error('probe requires --url <url>, --config <file>, or --curl "<command>"');
+    }
+    const result = await probeEndpoint(ep, args.timeout ? Number(args.timeout) : 10000);
+    printProbeResult(result);
+    if (!result.passed) process.exitCode = 1;
+    return;
+  }
+  if (command === 'ci') {
+    const type = args.type || args._[1] || 'github';
+    const yaml = generateCiWorkflow(type, args);
+    if (args.out) {
+      ensureDirFor(args.out);
+      fs.writeFileSync(args.out, yaml);
+      console.log(chalk.green(`✓ Generated ${type} CI workflow in ${args.out}`));
+    } else {
+      console.log(yaml);
+    }
+    return;
+  }
   if (!args['i-own-this-target']) throw new Error('Missing required safety flag: --i-own-this-target');
   if (command === 'ab' || command === 'diff') {
     const { diff } = await runAbTest(args);
@@ -1922,6 +2521,18 @@ async function saveReports(args, summary, results) {
     const mdPath = args.markdown || args.md;
     writeMarkdownReport(mdPath, summary); 
     console.log(chalk.green(`✓ Markdown report saved: ${mdPath}`)); 
+  }
+  if (args.prometheus) {
+    const prom = generatePrometheusMetrics(summary, results);
+    ensureDirFor(args.prometheus);
+    fs.writeFileSync(args.prometheus, prom);
+    console.log(chalk.green(`✓ Prometheus metrics saved: ${args.prometheus}`));
+  }
+  if (args.badge) {
+    const badgeSvg = generateSvgBadge(summary);
+    ensureDirFor(args.badge);
+    fs.writeFileSync(args.badge, badgeSvg);
+    console.log(chalk.green(`✓ Status badge saved: ${args.badge}`));
   }
   if (process.env.GITHUB_STEP_SUMMARY) {
     try {
@@ -1980,6 +2591,14 @@ export {
   evaluateAssertions,
   evaluateThresholds,
   parseHeaders,
-  parseArgs
+  parseArgs,
+  parsePostmanCollection,
+  parseOpenApiSpec,
+  generatePrometheusMetrics,
+  generateSvgBadge,
+  loadEnvFile,
+  parseCsvData,
+  probeEndpoint,
+  generateCiWorkflow
 };
 

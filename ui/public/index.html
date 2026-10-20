@@ -3,1368 +3,2430 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Safe Load Lab - Load Testing Suite</title>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <title>Safe Load Lab - Performance Engineering Studio</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
   <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
+    :root {
+      --bg-canvas: #090d16;
+      --bg-surface: #0f172a;
+      --bg-subtle: #131c31;
+      --bg-elevated: #1e293b;
+      --border-subtle: #1e293b;
+      --border-default: #334155;
+      --border-focus: #06b6d4;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --text-dim: #64748b;
+      --accent: #06b6d4;
+      --accent-hover: #0891b2;
+      --accent-dim: rgba(6, 182, 212, 0.12);
+      --success: #10b981;
+      --success-dim: rgba(16, 185, 129, 0.12);
+      --warning: #f59e0b;
+      --warning-dim: rgba(245, 158, 11, 0.12);
+      --danger: #ef4444;
+      --danger-dim: rgba(239, 68, 68, 0.12);
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
     }
 
-    :root {
-      --bg-primary: #0a0e27;
-      --bg-secondary: #111827;
-      --bg-tertiary: #1f2937;
-      --accent-primary: #6366f1;
-      --accent-secondary: #8b5cf6;
-      --text-primary: #f3f4f6;
-      --text-secondary: #d1d5db;
-      --text-tertiary: #9ca3af;
-      --border: #374151;
-      --success: #10b981;
-      --warning: #f59e0b;
-      --error: #ef4444;
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
     }
 
     body {
-      font-family: 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
-      background: var(--bg-primary);
-      color: var(--text-primary);
+      background-color: var(--bg-canvas);
+      color: var(--text-main);
+      font-family: var(--font-sans);
+      font-size: 14px;
+      line-height: 1.5;
       min-height: 100vh;
-      overflow-x: hidden;
+      display: flex;
+      flex-direction: column;
     }
 
-    .container {
-      max-width: 1400px;
-      margin: 0 auto;
-    }
-
-    /* Navigation */
-    nav {
-      background: var(--bg-secondary);
-      border-bottom: 1px solid var(--border);
-      padding: 0 20px;
+    header.app-header {
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border-default);
       position: sticky;
       top: 0;
-      z-index: 1000;
-      backdrop-filter: blur(10px);
-      background-color: rgba(17, 24, 39, 0.8);
+      z-index: 100;
     }
 
-    nav .container {
+    .header-inner {
+      max-width: 1440px;
+      margin: 0 auto;
+      padding: 0 20px;
+      height: 56px;
       display: flex;
-      justify-content: space-between;
       align-items: center;
-      height: 70px;
+      justify-content: space-between;
+      gap: 16px;
     }
 
-    .logo {
-      font-size: 24px;
-      font-weight: 700;
-      background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
+    .brand {
       display: flex;
       align-items: center;
       gap: 10px;
-      cursor: pointer;
-    }
-
-    .logo span {
-      font-size: 28px;
-    }
-
-    nav .links {
-      display: flex;
-      gap: 30px;
-      list-style: none;
-    }
-
-    nav a {
-      color: var(--text-secondary);
-      text-decoration: none;
-      font-weight: 500;
-      transition: all 0.3s;
-      font-size: 14px;
-      cursor: pointer;
-    }
-
-    nav a:hover,
-    nav a.active {
-      color: var(--accent-primary);
-    }
-
-    header {
-      padding: 60px 20px;
-      text-align: center;
-    }
-
-    h1 {
-      font-size: 48px;
-      margin-bottom: 10px;
-      background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
       font-weight: 700;
+      font-size: 16px;
+      letter-spacing: -0.02em;
+      cursor: pointer;
+      user-select: none;
     }
 
-    .subtitle {
-      color: var(--text-secondary);
-      font-size: 18px;
-      margin-bottom: 20px;
+    .brand-icon {
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      background: linear-gradient(135deg, #06b6d4, #3b82f6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      font-weight: 800;
+      font-size: 15px;
     }
 
-    .main-grid {
+    .version-tag {
+      font-size: 11px;
+      font-family: var(--font-mono);
+      color: var(--text-dim);
+      background: var(--bg-elevated);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-weight: 600;
+    }
+
+    nav.nav-tabs {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .nav-tab-btn {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font-size: 13px;
+      font-weight: 600;
+      padding: 8px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .nav-tab-btn:hover {
+      color: var(--text-main);
+      background: var(--bg-elevated);
+    }
+
+    .nav-tab-btn.active {
+      color: var(--accent);
+      background: var(--accent-dim);
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .mock-pill {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--bg-subtle);
+      border: 1px solid var(--border-default);
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--danger);
+      box-shadow: 0 0 6px var(--danger);
+      transition: all 0.2s;
+    }
+
+    .status-dot.active {
+      background: var(--success);
+      box-shadow: 0 0 8px var(--success);
+    }
+
+    .active-run-banner {
+      background: rgba(6, 182, 212, 0.15);
+      border-bottom: 1px solid var(--accent);
+      color: var(--text-main);
+      padding: 8px 20px;
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 13px;
+      animation: fadeIn 0.2s;
+    }
+
+    .active-run-banner.show {
+      display: flex;
+    }
+
+    main.app-main {
+      flex: 1;
+      max-width: 1440px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 24px 20px;
+    }
+
+    .tab-view {
+      display: none;
+      animation: fadeIn 0.15s ease-out;
+    }
+
+    .tab-view.active {
+      display: block;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .workbench-grid {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: 480px 1fr;
       gap: 20px;
-      margin-bottom: 20px;
+      align-items: start;
     }
 
-    @media (max-width: 1000px) {
-      .main-grid {
+    @media (max-width: 1100px) {
+      .workbench-grid {
         grid-template-columns: 1fr;
       }
     }
 
     .card {
-      background: var(--bg-secondary);
-      border-radius: 16px;
-      padding: 30px;
-      border: 1px solid var(--border);
-      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.3);
-      transition: all 0.3s;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-default);
+      border-radius: 8px;
+      overflow: hidden;
     }
 
-    .card:hover {
-      border-color: var(--accent-primary);
-      box-shadow: 0 20px 25px -5px rgba(99, 102, 241, 0.15);
+    .card-header {
+      padding: 14px 18px;
+      background: var(--bg-subtle);
+      border-bottom: 1px solid var(--border-default);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
     }
 
-    .card h2 {
-      color: var(--text-primary);
-      font-size: 22px;
-      margin-bottom: 25px;
-      border-bottom: 2px solid var(--border);
-      padding-bottom: 15px;
+    .card-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text-main);
+      display: flex;
+      align-items: center;
+      gap: 8px;
     }
 
-    .page {
-      display: none;
-      animation: fadeIn 0.3s;
-    }
-
-    .page.active {
-      display: block;
-    }
-
-    @keyframes fadeIn {
-      from { opacity: 0; }
-      to { opacity: 1; }
+    .card-body {
+      padding: 18px;
     }
 
     .form-group {
-      margin-bottom: 20px;
+      margin-bottom: 16px;
+    }
+
+    .form-group:last-child {
+      margin-bottom: 0;
     }
 
     label {
       display: block;
-      color: var(--text-primary);
+      font-size: 12px;
       font-weight: 600;
-      margin-bottom: 8px;
-      font-size: 14px;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .input-hint {
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-top: 4px;
     }
 
     input[type="text"],
-    input[type="number"],
     input[type="url"],
+    input[type="number"],
     select,
     textarea {
       width: 100%;
-      padding: 12px;
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      font-size: 14px;
+      background: var(--bg-canvas);
+      border: 1px solid var(--border-default);
+      border-radius: 6px;
+      color: var(--text-main);
+      font-size: 13px;
       font-family: inherit;
-      background: var(--bg-tertiary);
-      color: var(--text-primary);
-      transition: all 0.3s;
+      padding: 9px 12px;
+      transition: all 0.15s;
     }
 
-    input[type="text"]:focus,
-    input[type="number"]:focus,
-    input[type="url"]:focus,
+    input:focus,
     select:focus,
     textarea:focus {
       outline: none;
-      border-color: var(--accent-primary);
-      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
-      background: var(--bg-tertiary);
+      border-color: var(--border-focus);
+      box-shadow: 0 0 0 2px rgba(6, 182, 212, 0.2);
     }
 
     .form-row {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 15px;
+      gap: 12px;
     }
 
-    .button-group {
-      display: flex;
+    .form-row-3 {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 12px;
+    }
+
+    .form-row-4 {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr 1fr;
       gap: 10px;
-      margin-top: 25px;
     }
 
-    button {
-      flex: 1;
-      padding: 12px 20px;
-      border: none;
-      border-radius: 10px;
-      font-size: 14px;
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 8px 14px;
+      font-size: 13px;
       font-weight: 600;
+      border-radius: 6px;
+      border: 1px solid transparent;
       cursor: pointer;
-      transition: all 0.3s;
+      transition: all 0.15s ease;
+      white-space: nowrap;
+      text-decoration: none;
+    }
+
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
     }
 
     .btn-primary {
-      background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
-      color: white;
+      background: var(--accent);
+      color: #041018;
     }
 
-    .btn-primary:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 10px 20px rgba(99, 102, 241, 0.3);
+    .btn-primary:hover:not(:disabled) {
+      background: var(--accent-hover);
     }
 
     .btn-secondary {
-      background: var(--bg-tertiary);
-      color: var(--text-primary);
-      border: 1px solid var(--border);
+      background: var(--bg-elevated);
+      color: var(--text-main);
+      border-color: var(--border-default);
     }
 
-    .btn-secondary:hover {
-      background: var(--border);
-      border-color: var(--accent-primary);
+    .btn-secondary:hover:not(:disabled) {
+      background: #283548;
+      border-color: #475569;
     }
 
-    .alert {
-      padding: 15px;
-      border-radius: 10px;
-      margin-bottom: 15px;
-      font-size: 14px;
-      border-left: 4px solid;
+    .btn-danger {
+      background: var(--danger);
+      color: #fff;
     }
 
-    .alert-success {
-      background: rgba(16, 185, 129, 0.1);
-      color: #10b981;
-      border-left-color: #10b981;
+    .btn-danger:hover:not(:disabled) {
+      background: #dc2626;
     }
 
-    .alert-error {
-      background: rgba(239, 68, 68, 0.1);
-      color: #ef4444;
-      border-left-color: #ef4444;
-    }
-
-    .alert-info {
-      background: rgba(99, 102, 241, 0.1);
-      color: #6366f1;
-      border-left-color: #6366f1;
-    }
-
-    .tabs {
-      display: flex;
-      gap: 10px;
-      margin-bottom: 20px;
-      border-bottom: 2px solid var(--border);
-    }
-
-    .tab-btn {
-      padding: 12px 20px;
-      background: none;
-      border: none;
-      cursor: pointer;
-      font-weight: 600;
-      color: var(--text-tertiary);
-      border-bottom: 3px solid transparent;
-      margin-bottom: -2px;
-      transition: all 0.3s;
-    }
-
-    .tab-btn.active {
-      color: var(--accent-primary);
-      border-bottom-color: var(--accent-primary);
-    }
-
-    .tab-content {
-      display: none;
-    }
-
-    .tab-content.active {
-      display: block;
+    .btn-sm {
+      padding: 5px 10px;
+      font-size: 12px;
     }
 
     .stats-grid {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 15px;
-      margin-bottom: 20px;
+      grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+      gap: 12px;
+      margin-bottom: 18px;
     }
 
-    @media (max-width: 600px) {
-      .stats-grid {
-        grid-template-columns: 1fr;
-      }
-    }
-
-    .stat-box {
-      background: var(--bg-tertiary);
-      padding: 20px;
-      border-radius: 12px;
-      border-left: 4px solid var(--accent-primary);
-      border: 1px solid var(--border);
-      border-left: 4px solid var(--accent-primary);
+    .stat-card {
+      background: var(--bg-subtle);
+      border: 1px solid var(--border-default);
+      border-radius: 6px;
+      padding: 12px 14px;
     }
 
     .stat-label {
-      color: var(--text-tertiary);
-      font-size: 12px;
+      font-size: 11px;
       font-weight: 600;
       text-transform: uppercase;
-      margin-bottom: 8px;
-      letter-spacing: 0.5px;
+      color: var(--text-dim);
+      margin-bottom: 4px;
     }
 
-    .stat-value {
-      color: var(--text-primary);
-      font-size: 28px;
+    .stat-val {
+      font-family: var(--font-mono);
+      font-size: 20px;
       font-weight: 700;
+      color: var(--text-main);
+    }
+
+    .stat-val.highlight { color: var(--accent); }
+    .stat-val.success { color: var(--success); }
+    .stat-val.warning { color: var(--warning); }
+    .stat-val.danger { color: var(--danger); }
+
+    .console-box {
+      background: #040810;
+      border: 1px solid var(--border-default);
+      border-radius: 6px;
+      overflow: hidden;
+      margin-bottom: 18px;
+    }
+
+    .console-header {
+      background: #090e1a;
+      border-bottom: 1px solid var(--border-default);
+      padding: 6px 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 12px;
+      color: var(--text-dim);
+    }
+
+    .console-body {
+      padding: 12px;
+      height: 220px;
+      overflow-y: auto;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      line-height: 1.5;
+      color: #cbd5e1;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    .chart-box {
+      background: var(--bg-subtle);
+      border: 1px solid var(--border-default);
+      border-radius: 6px;
+      padding: 14px;
+      margin-bottom: 18px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-family: var(--font-mono);
+      font-weight: 600;
+    }
+
+    .badge-success { background: var(--success-dim); color: var(--success); }
+    .badge-warning { background: var(--warning-dim); color: var(--warning); }
+    .badge-danger { background: var(--danger-dim); color: var(--danger); }
+    .badge-neutral { background: var(--bg-elevated); color: var(--text-muted); }
+
+    table.data-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    table.data-table th {
+      text-align: left;
+      padding: 10px 12px;
+      background: var(--bg-subtle);
+      border-bottom: 1px solid var(--border-default);
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      color: var(--text-dim);
+    }
+
+    table.data-table td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border-subtle);
+      color: var(--text-main);
+    }
+
+    table.data-table tr:hover td {
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .history-card {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border-subtle);
+      transition: background 0.15s;
+    }
+
+    .history-card:hover {
+      background: var(--bg-subtle);
+    }
+
+    .preset-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 16px;
+    }
+
+    .preset-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-default);
+      border-radius: 8px;
+      padding: 16px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .preset-card:hover {
+      border-color: var(--accent);
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }
+
+    .preset-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text-main);
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .preset-desc {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-bottom: 12px;
+      line-height: 1.4;
+    }
+
+    .preset-meta {
+      display: flex;
+      gap: 8px;
+      font-size: 11px;
+      font-family: var(--font-mono);
+      color: var(--text-dim);
     }
 
     .progress-bar {
-      width: 100%;
-      height: 8px;
-      background: var(--bg-tertiary);
-      border-radius: 4px;
+      height: 4px;
+      background: var(--bg-canvas);
+      border-radius: 2px;
       overflow: hidden;
-      margin: 15px 0;
-      border: 1px solid var(--border);
+      margin-bottom: 14px;
+      display: none;
     }
 
+    .progress-bar.active { display: block; }
     .progress-fill {
       height: 100%;
-      background: linear-gradient(90deg, var(--accent-primary), var(--accent-secondary));
+      background: var(--accent);
       width: 0%;
       transition: width 0.3s;
     }
 
-    .chart-container {
-      position: relative;
-      height: 300px;
-      margin: 20px 0;
-    }
-
-    .loading {
-      display: inline-block;
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: var(--accent-primary);
-      animation: pulse 1.5s ease-in-out infinite;
-      margin-right: 5px;
-    }
-
-    @keyframes pulse {
-      0%, 100% { opacity: 0.4; }
-      50% { opacity: 1; }
-    }
-
-    .template-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 15px;
-      margin-bottom: 20px;
-    }
-
-    .template-card {
-      padding: 15px;
-      border: 2px solid var(--border);
-      border-radius: 12px;
-      cursor: pointer;
-      transition: all 0.3s;
-      background: var(--bg-tertiary);
-    }
-
-    .template-card:hover {
-      border-color: var(--accent-primary);
-      background: rgba(99, 102, 241, 0.1);
-    }
-
-    .template-card h3 {
-      color: var(--text-primary);
-      font-size: 14px;
-      margin-bottom: 5px;
-    }
-
-    .template-card p {
-      color: var(--text-tertiary);
-      font-size: 12px;
-    }
-
-    .badge {
-      display: inline-block;
-      padding: 6px 12px;
-      border-radius: 6px;
-      font-size: 12px;
-      font-weight: 600;
-    }
-
-    .badge-success {
-      background: rgba(16, 185, 129, 0.2);
-      color: #10b981;
-    }
-
-    .badge-warning {
-      background: rgba(245, 158, 11, 0.2);
-      color: #f59e0b;
-    }
-
-    /* About Page Styles */
-    .about-section {
-      padding: 20px;
-      margin-bottom: 30px;
-    }
-
-    .about-section h2 {
-      color: var(--accent-primary);
-      font-size: 28px;
-      margin-bottom: 15px;
-      margin-top: 30px;
-    }
-
-    .about-section h3 {
-      color: var(--text-primary);
-      font-size: 20px;
-      margin-bottom: 12px;
-      margin-top: 20px;
-    }
-
-    .about-section p {
-      color: var(--text-secondary);
-      line-height: 1.8;
-      margin-bottom: 15px;
-      font-size: 15px;
-    }
-
-    .feature-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-      gap: 20px;
-      margin: 20px 0;
-    }
-
-    .feature-card {
-      background: var(--bg-tertiary);
-      padding: 20px;
-      border-radius: 12px;
-      border: 1px solid var(--border);
-      transition: all 0.3s;
-    }
-
-    .feature-card:hover {
-      border-color: var(--accent-primary);
-      transform: translateY(-5px);
-    }
-
-    .feature-icon {
-      font-size: 32px;
-      margin-bottom: 10px;
-    }
-
-    .feature-card h4 {
-      color: var(--text-primary);
+    .header-row {
+      display: flex;
+      gap: 8px;
       margin-bottom: 8px;
-    }
-
-    .feature-card p {
-      color: var(--text-tertiary);
-      font-size: 14px;
-    }
-
-    .step-list {
-      list-style: none;
-      margin: 20px 0;
-    }
-
-    .step-list li {
-      color: var(--text-secondary);
-      margin-bottom: 12px;
-      padding-left: 30px;
-      position: relative;
-      line-height: 1.6;
-    }
-
-    .step-list li:before {
-      content: counter(step);
-      counter-increment: step;
-      position: absolute;
-      left: 0;
-      top: 0;
-      background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
-      color: white;
-      width: 24px;
-      height: 24px;
-      border-radius: 50%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-weight: 600;
-      font-size: 12px;
-    }
-
-    .code-block {
-      background: var(--bg-tertiary);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 15px;
-      margin: 15px 0;
-      overflow-x: auto;
-      font-family: 'Courier New', monospace;
-      font-size: 13px;
-      color: #6ee7b7;
-      line-height: 1.5;
-    }
-
-    .history-list {
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-    }
-
-    .history-item {
-      background: var(--bg-tertiary);
-      padding: 15px;
-      border-radius: 10px;
-      border: 1px solid var(--border);
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      transition: all 0.3s;
-    }
-
-    .history-item:hover {
-      border-color: var(--accent-primary);
-      background: rgba(99, 102, 241, 0.05);
-    }
-
-    .section-divider {
-      height: 1px;
-      background: var(--border);
-      margin: 40px 0;
-    }
-
-    .cta-section {
-      background: linear-gradient(135deg, rgba(99, 102, 241, 0.1), rgba(139, 92, 246, 0.1));
-      border: 1px solid var(--accent-primary);
-      border-radius: 16px;
-      padding: 40px 30px;
-      text-align: center;
-      margin: 40px 0;
-    }
-
-    .cta-section h3 {
-      color: var(--text-primary);
-      font-size: 24px;
-      margin-bottom: 10px;
-    }
-
-    .cta-section p {
-      color: var(--text-secondary);
-      margin-bottom: 25px;
-    }
-
-    .cta-section button {
-      padding: 14px 40px;
-      font-size: 16px;
     }
   </style>
 </head>
 <body>
-  <nav>
-    <div class="container">
-      <div class="logo" onclick="goToPage('dashboard')">
-        <span>⚡</span>
+
+  <!-- Top Application Header -->
+  <header class="app-header">
+    <div class="header-inner">
+      <div class="brand" onclick="switchNav('workbench')">
+        <div class="brand-icon">⚡</div>
         <div>Safe Load Lab</div>
-      </div>
-      <ul class="links">
-        <li><a class="nav-link active" href="#" onclick="goToPage('dashboard'); return false;">Dashboard</a></li>
-        <li><a class="nav-link" href="#" onclick="goToPage('about'); return false;">About</a></li>
-      </ul>
-    </div>
-  </nav>
-
-  <div class="container">
-    <!-- Dashboard Page -->
-    <div id="dashboard" class="page active">
-      <header>
-        <h1>Load Testing Suite</h1>
-        <p class="subtitle">Controlled performance testing for applications you own</p>
-      </header>
-
-      <!-- Hermetic Mock Server Controller Bar -->
-      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:14px;padding:14px 20px;margin-bottom:24px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;">
-        <div style="display:flex;align-items:center;gap:12px;">
-          <span id="mockStatusDot" style="width:12px;height:12px;border-radius:50%;background:#ef4444;display:inline-block;box-shadow:0 0 8px #ef4444;"></span>
-          <span style="font-size:15px;font-weight:700;">Local Hermetic Mock Server</span>
-          <span id="mockStatusBadge" style="background:rgba(239,68,68,0.2);color:#ef4444;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600;">Stopped</span>
-        </div>
-        <div style="display:flex;gap:10px;flex-wrap:wrap;">
-          <button type="button" class="btn-secondary" style="padding:8px 16px;font-size:13px;" onclick="toggleMockServer()">Toggle Mock Server (Port 8080)</button>
-          <button type="button" class="btn-secondary" style="padding:8px 16px;font-size:13px;" onclick="fillMockEndpoints()">Use Mock Endpoints</button>
-        </div>
+        <span class="version-tag">v2.2.0</span>
       </div>
 
-      <div class="main-grid">
-      <!-- Config Builder -->
-      <div class="card">
-        <h2>Configure Test</h2>
-        
-        <div class="tabs">
-          <button class="tab-btn active" onclick="switchTab('quick')">Quick</button>
-          <button class="tab-btn" onclick="switchTab('ab')">A/B Testing</button>
-          <button class="tab-btn" onclick="switchTab('advanced')">Advanced</button>
-        </div>
+      <nav class="nav-tabs">
+        <button class="nav-tab-btn active" onclick="switchNav('workbench')">
+          <span>⚡</span> Workbench
+        </button>
+        <button class="nav-tab-btn" onclick="switchNav('ab')">
+          <span>⚖️</span> A/B Benchmark
+        </button>
+        <button class="nav-tab-btn" onclick="switchNav('compare')">
+          <span>🔍</span> Compare Runs
+        </button>
+        <button class="nav-tab-btn" onclick="switchNav('presets')">
+          <span>📂</span> Import & Presets
+        </button>
+        <button class="nav-tab-btn" onclick="switchNav('history')">
+          <span>📊</span> Reports (<span id="historyCount">0</span>)
+        </button>
+        <button class="nav-tab-btn" onclick="switchNav('docs')">
+          <span>📖</span> Reference
+        </button>
+      </nav>
 
-        <!-- Quick Config -->
-        <div id="quick" class="tab-content active">
-          <div id="alerts-quick"></div>
-
-          <div class="form-group">
-            <label>Import from cURL (optional)</label>
-            <div style="display:flex;gap:8px;">
-              <input type="text" id="quickCurl" placeholder="curl -X POST http://localhost:8080/echo -d '{&quot;hello&quot;:&quot;world&quot;}'">
-              <button type="button" class="btn-secondary" style="white-space:nowrap;padding:8px 14px;font-size:12px;" onclick="importCurl()">Parse</button>
-            </div>
-          </div>
-
-          <div class="form-group">
-            <label>Target URL *</label>
-            <input type="url" id="quickUrl" placeholder="http://localhost:3000/api/health">
-          </div>
-
-          <div class="form-row">
-            <div class="form-group">
-              <label>Duration (seconds) *</label>
-              <input type="number" id="quickDuration" value="30" min="1" max="600">
-            </div>
-            <div class="form-group">
-              <label>Concurrency *</label>
-              <input type="number" id="quickConcurrency" value="5" min="1" max="100">
-            </div>
-          </div>
-
-          <div class="form-group">
-            <label>Requests per Second (RPS) *</label>
-            <input type="number" id="quickRps" value="10" min="1" max="200">
-          </div>
-
-          <div class="button-group">
-            <button class="btn-secondary" onclick="validateConfig('quick')">Validate</button>
-            <button class="btn-primary" onclick="runTest('quick')">Run Test</button>
-          </div>
-        </div>
-
-        <!-- A/B Testing Config -->
-        <div id="ab" class="tab-content">
-          <div id="alerts-ab"></div>
-
-          <div class="form-group">
-            <label>Variant A URL (Baseline) *</label>
-            <input type="url" id="abUrlA" placeholder="http://localhost:8080/fast" value="http://localhost:8080/fast">
-          </div>
-
-          <div class="form-group">
-            <label>Variant B URL (Candidate / Canary) *</label>
-            <input type="url" id="abUrlB" placeholder="http://localhost:8080/slow?delay=40" value="http://localhost:8080/slow?delay=40">
-          </div>
-
-          <div class="form-row">
-            <div class="form-group">
-              <label>Duration (s) *</label>
-              <input type="number" id="abDuration" value="5" min="1" max="600">
-            </div>
-            <div class="form-group">
-              <label>Concurrency *</label>
-              <input type="number" id="abConcurrency" value="2" min="1" max="100">
-            </div>
-          </div>
-
-          <div class="form-row">
-            <div class="form-group">
-              <label>Target RPS *</label>
-              <input type="number" id="abRps" value="5" min="1" max="200">
-            </div>
-            <div class="form-group">
-              <label>Max Latency Diff (%) *</label>
-              <input type="number" id="abMaxLatencyDiff" value="20" min="1" max="500">
-            </div>
-          </div>
-
-          <div class="button-group">
-            <button class="btn-primary" onclick="runAbTest()">Run A/B Benchmark</button>
-          </div>
-        </div>
-
-        <!-- Advanced Config -->
-        <div id="advanced" class="tab-content">
-          <div id="alerts-advanced"></div>
-
-          <div class="form-group">
-            <label>Config JSON</label>
-            <textarea id="advancedConfig" rows="15" placeholder="Paste or edit your config here...">{
-  "url": "http://localhost:3000/api/health",
-  "stages": [
-    {
-      "name": "warm-up",
-      "durationSeconds": 30,
-      "concurrency": 3,
-      "rps": 8
-    },
-    {
-      "name": "steady",
-      "durationSeconds": 60,
-      "concurrency": 10,
-      "rps": 25
-    }
-  ]
-}</textarea>
-          </div>
-
-          <div class="button-group">
-            <button class="btn-secondary" onclick="validateConfig('advanced')">Validate</button>
-            <button class="btn-primary" onclick="runTest('advanced')">Run Test</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Results Dashboard -->
-      <div class="card">
-        <h2>Results</h2>
-
-        <div id="results-area">
-          <p style="color: #999; text-align: center; padding: 40px 20px;">
-            Run a test to see results here
-          </p>
-        </div>
-
-        <div id="test-progress" style="display: none;">
-          <div class="progress-bar">
-            <div class="progress-fill" id="progressFill"></div>
-          </div>
-          <p style="text-align: center; color: #999; font-size: 14px;">
-            <span class="loading"></span> Running test...
-          </p>
-        </div>
-
-        <div id="stats-container"></div>
-        <div id="chart-container"></div>
-      </div>
-    </div>
-
-    <!-- History -->
-    <div class="card">
-      <h2>Test History</h2>
-      <div id="history-list">
-        <p style="color: var(--text-tertiary); text-align: center; padding: 20px;">
-          No tests run yet
-        </p>
-      </div>
-    </div>
-    </div>
-
-    <!-- About Page -->
-    <div id="about" class="page">
-      <div class="about-section">
-        <h1>About Safe Load Lab</h1>
-        <p class="subtitle">Everything you need to know about load testing</p>
-      </div>
-
-      <div class="card">
-        <div class="about-section">
-          <h2>🎯 What is Safe Load Lab?</h2>
-          <p>
-            Safe Load Lab is a controlled load testing tool designed for developers, QA engineers, and DevOps teams who want to test their own applications. Unlike cloud-based load testing services, it runs entirely on your machine with zero dependencies on external services, APIs, or subscriptions.
-          </p>
-          <p>
-            It sends simulated HTTP requests to your application to measure how it performs under load, revealing potential bottlenecks, capacity limits, and performance issues before they reach production.
-          </p>
-
-          <h2>✅ Key Features</h2>
-          <div class="feature-grid">
-            <div class="feature-card">
-              <div class="feature-icon">🚀</div>
-              <h4>Lightning Fast</h4>
-              <p>Runs locally with no cloud dependency. Generate thousands of requests per second.</p>
-            </div>
-            <div class="feature-card">
-              <div class="feature-icon">🔒</div>
-              <h4>100% Private</h4>
-              <p>All testing stays on your machine. No data sent to external services or cloud platforms.</p>
-            </div>
-            <div class="feature-card">
-              <div class="feature-icon">🎛️</div>
-              <h4>Fine Control</h4>
-              <p>Configure concurrency, RPS, duration, staged ramps, and authentication flows.</p>
-            </div>
-            <div class="feature-card">
-              <div class="feature-icon">📊</div>
-              <h4>Rich Reports</h4>
-              <p>Generate HTML dashboards, JSON data, and CSV exports for analysis and documentation.</p>
-            </div>
-            <div class="feature-card">
-              <div class="feature-icon">🛡️</div>
-              <h4>Built-in Safety</h4>
-              <p>Hard limits prevent accidental runaway tests. Confirmation required before running.</p>
-            </div>
-            <div class="feature-card">
-              <div class="feature-icon">⚡</div>
-              <h4>No Setup Required</h4>
-              <p>Just Node.js 18+. No LLM, API keys, database, or paid subscriptions needed.</p>
-            </div>
-          </div>
-
-          <h2>🚀 Quick Start</h2>
-          <ol class="step-list" style="counter-reset: step 0;">
-            <li><strong>Fill the form</strong> - Enter your URL, duration, concurrency, and RPS</li>
-            <li><strong>Click Validate</strong> - Check your config is correct (optional)</li>
-            <li><strong>Click Run Test</strong> - Watch it execute in real-time</li>
-            <li><strong>Review Results</strong> - See metrics like latency, success rate, and throughput</li>
-            <li><strong>Check Reports</strong> - Open HTML dashboard or export data</li>
-          </ol>
-
-          <div class="cta-section">
-            <h3>Ready to test your app?</h3>
-            <p>Go to the Dashboard tab above to configure and run your first load test</p>
-            <button class="btn-primary" onclick="goToPage('dashboard')">Open Dashboard</button>
-          </div>
-
-          <h2>📖 Understanding Load Testing Metrics</h2>
-          <p><strong>Total Requests:</strong> How many HTTP requests were sent to your application.</p>
-          <p><strong>Success Rate:</strong> Percentage of requests that returned a successful response (2xx or 3xx). 
-             <code style="background: var(--bg-tertiary); padding: 2px 6px; border-radius: 4px;">98% = excellent, 80% = concerning, 50% = overloaded</code></p>
-          <p><strong>Average Latency:</strong> Mean response time in milliseconds. 
-             <code style="background: var(--bg-tertiary); padding: 2px 6px; border-radius: 4px;">100ms = good, 500ms = slow, 2000ms+ = problem</code></p>
-          <p><strong>P95 Latency:</strong> 95th percentile - 95% of requests were faster than this. Good for SLA planning.</p>
-          <p><strong>P99 Latency:</strong> 99th percentile - Shows how your worst-case requests perform (almost always).</p>
-
-          <h2>🔧 How to Use the Dashboard</h2>
-          
-          <h3>Quick Mode (Recommended for Beginners)</h3>
-          <p>Fill in simple fields:</p>
-          <ul class="step-list" style="counter-reset: step 0;">
-            <li><strong>Target URL</strong> - The endpoint to test (e.g., http://localhost:3000/api/health)</li>
-            <li><strong>Duration</strong> - How long to run (start with 30-60 seconds)</li>
-            <li><strong>Concurrency</strong> - Parallel requests (start with 5-10)</li>
-            <li><strong>RPS</strong> - Requests per second (start with 10-25)</li>
-          </ul>
-
-          <h3>Advanced Mode (For Power Users)</h3>
-          <p>Use full JSON configuration for staged testing, authentication, and custom headers:</p>
-          <div class="code-block">
-{
-  "url": "http://localhost:3000/api/users",
-  "stages": [
-    {
-      "name": "warm-up",
-      "durationSeconds": 30,
-      "concurrency": 3,
-      "rps": 8
-    },
-    {
-      "name": "steady",
-      "durationSeconds": 60,
-      "concurrency": 25,
-      "rps": 50
-    }
-  ]
-}
-          </div>
-
-          <h2>⚠️ Safety Guidelines</h2>
-          <p><strong>Only test systems you own or have explicit permission to test.</strong></p>
-          <ul class="step-list" style="counter-reset: step 0;">
-            <li>Test your own local development environment</li>
-            <li>Test your company's staging/QA environments</li>
-            <li>Test production systems you own and maintain</li>
-            <li>Get written permission before testing shared infrastructure</li>
-            <li>Notify your team before running tests</li>
-            <li>Monitor your application during testing</li>
-            <li>Stop immediately if errors spike or the system becomes unresponsive</li>
-          </ul>
-
-          <h2>🛡️ Built-in Safety Limits</h2>
-          <p>These hard limits protect against accidental resource exhaustion:</p>
-          <div class="code-block">
-Maximum Duration:    600 seconds (10 minutes)
-Maximum Concurrency: 100 simultaneous requests
-Maximum RPS:         200 requests per second
-Maximum Body Size:   1 MB per request
-          </div>
-          <p><small>All tests require confirmation that you own the target.</small></p>
-
-          <h2>📊 Common Testing Scenarios</h2>
-          
-          <h3>Health Check (Baseline)</h3>
-          <p>Test a simple endpoint to verify connectivity and baseline performance:</p>
-          <div class="code-block">
-URL:         http://localhost:3000/api/health
-Duration:    30 seconds
-Concurrency: 2
-RPS:         5
-          </div>
-
-          <h3>Normal Load</h3>
-          <p>Simulate typical business hours traffic:</p>
-          <div class="code-block">
-URL:         http://localhost:3000/api/users
-Duration:    60 seconds
-Concurrency: 10
-RPS:         25
-          </div>
-
-          <h3>Stress Test</h3>
-          <p>Find where your app breaks:</p>
-          <div class="code-block">
-URL:         http://localhost:3000/api/search
-Duration:    120 seconds
-Concurrency: 50-100
-RPS:         100-200
-          </div>
-
-          <h2>❓ Frequently Asked Questions</h2>
-          
-          <h3>Do I need an API key or subscription?</h3>
-          <p>No. Safe Load Lab runs entirely on your machine. No cloud service, LLM, or external API required.</p>
-
-          <h3>Can I test authenticated endpoints?</h3>
-          <p>Yes. Use Advanced mode to add authentication headers, cookies, or setup/login flows.</p>
-
-          <h3>Where are my test reports saved?</h3>
-          <p>All reports are saved in the <code style="background: var(--bg-tertiary); padding: 2px 6px; border-radius: 4px;">reports/</code> directory.</p>
-
-          <h3>Why are my results inconsistent?</h3>
-          <p>Network latency, CPU usage, disk I/O, and other system factors vary. Run multiple tests to get better averages.</p>
-
-          <h3>Can I test external websites?</h3>
-          <p><strong>Only if you own them.</strong> Load testing third-party sites without permission is illegal.</p>
-
-          <h3>My test keeps failing with 4xx/5xx errors</h3>
-          <p>Check: application URL, authentication headers, request body format, endpoint availability, server logs, and database connectivity.</p>
-
-          <h2>🎓 Best Practices</h2>
-          <ul class="step-list" style="counter-reset: step 0;">
-            <li>Always validate your config before running</li>
-            <li>Start with low concurrency and RPS, then increase gradually</li>
-            <li>Monitor your application during tests (CPU, memory, database)</li>
-            <li>Run tests during off-peak hours on shared systems</li>
-            <li>Notify team members before running tests</li>
-            <li>Use staged testing for realistic patterns (warm-up → steady → cool-down)</li>
-            <li>Run the same test multiple times to verify consistency</li>
-            <li>Document your findings and track improvements over time</li>
-          </ul>
-
-          <h2>📞 Troubleshooting</h2>
-
-          <h3>Error: "Connection refused"</h3>
-          <p>Your application is not running or the URL is wrong. Test it:</p>
-          <div class="code-block">
-curl http://localhost:3000/api/health
-          </div>
-
-          <h3>Error: "sll: command not found"</h3>
-          <p>The CLI tool isn't installed. From the project folder, run:</p>
-          <div class="code-block">
-npm install -g .
-          </div>
-
-          <h3>Port 3001 already in use</h3>
-          <p>Another process is using the port. Restart your computer or wait for the other process to finish.</p>
-
-          <h3>Test won't start</h3>
-          <p>Make sure all required fields are filled. URL must start with http:// or https://</p>
-
+      <div class="header-actions">
+        <div class="mock-pill" title="Local hermetic mock server for zero-flake load tests">
+          <div class="status-dot" id="mockDot"></div>
+          <span id="mockLabel" style="font-family:var(--font-mono);font-weight:600;">Mock :8080</span>
+          <button class="btn btn-secondary btn-sm" id="btnToggleMock" onclick="toggleMockServer()">Start</button>
         </div>
       </div>
     </div>
+  </header>
+
+  <!-- Active Execution Banner -->
+  <div class="active-run-banner" id="activeRunBanner">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--accent);animation:pulse 1s infinite;"></span>
+      <strong>Load test executing:</strong>
+      <span id="bannerTestName" style="font-family:var(--font-mono);"></span>
+      <span class="badge badge-neutral" id="bannerTimer">0.0s</span>
+    </div>
+    <button class="btn btn-danger btn-sm" onclick="abortRunningTest()">Abort Test</button>
   </div>
 
-  <script>
-    let currentConfig = null;
-    let testResults = null;
+  <main class="app-main">
 
-    // Page Navigation
-    function goToPage(page) {
-      // Hide all pages
-      document.querySelectorAll('.page').forEach(el => el.classList.remove('active'));
-      document.querySelectorAll('.nav-link').forEach(el => el.classList.remove('active'));
-      
-      // Show selected page
-      document.getElementById(page).classList.add('active');
-      event?.target?.classList.add('active');
-      
-      // Scroll to top
-      window.scrollTo(0, 0);
-    }
-
-    function switchTab(tab) {
-      document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
-      document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
-      document.getElementById(tab).classList.add('active');
-      event.target.classList.add('active');
-    }
-
-    function validateConfig(type) {
-      const config = getConfig(type);
-      if (!config) return;
-
-      fetch('/api/validate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(config)
-      })
-      .then(r => r.json())
-      .then(data => {
-        const alertId = `alerts-${type}`;
-        const alertEl = document.getElementById(alertId);
-        if (data.valid) {
-          alertEl.innerHTML = '<div class="alert alert-success">✓ Configuration is valid and ready to run</div>';
-        } else {
-          alertEl.innerHTML = `<div class="alert alert-error">✗ ${data.error}</div>`;
-        }
-      })
-      .catch(err => {
-        document.getElementById(`alerts-${type}`).innerHTML = `<div class="alert alert-error">Error: ${err.message}</div>`;
-      });
-    }
-
-    function getConfig(type) {
-      if (type === 'quick') {
-        const url = document.getElementById('quickUrl').value;
-        const duration = parseInt(document.getElementById('quickDuration').value);
-        const concurrency = parseInt(document.getElementById('quickConcurrency').value);
-        const rps = parseInt(document.getElementById('quickRps').value);
-
-        if (!url || !duration || !concurrency || !rps) {
-          alert('Please fill all required fields');
-          return null;
-        }
-
-        return {
-          url,
-          stages: [{
-            name: 'test',
-            durationSeconds: duration,
-            concurrency,
-            rps
-          }]
-        };
-      } else {
-        try {
-          return JSON.parse(document.getElementById('advancedConfig').value);
-        } catch (e) {
-          alert('Invalid JSON: ' + e.message);
-          return null;
-        }
-      }
-    }
-
-    function runTest(type) {
-      const config = getConfig(type);
-      if (!config) return;
-
-      currentConfig = config;
-      const reportName = `test-${new Date().toISOString().split('T')[0]}-${Date.now()}`;
-
-      document.getElementById('test-progress').style.display = 'block';
-      document.getElementById('progressFill').style.width = '0%';
-
-      const eventSource = new EventSource('/api/run');
-      let progressPercent = 0;
-
-      const messageHandler = (event) => {
-        const data = JSON.parse(event.data);
+    <!-- 1. WORKBENCH TAB -->
+    <section id="view-workbench" class="tab-view active">
+      <div class="workbench-grid">
         
-        if (data.type === 'progress') {
-          progressPercent = Math.min(progressPercent + 10, 80);
-          document.getElementById('progressFill').style.width = progressPercent + '%';
-        } else if (data.type === 'complete' && data.success) {
-          progressPercent = 100;
-          document.getElementById('progressFill').style.width = '100%';
-          testResults = data.summary;
-          displayResults(data);
-          setTimeout(() => {
-            document.getElementById('test-progress').style.display = 'none';
-            loadHistory();
-          }, 1000);
-          eventSource.close();
-        } else if (data.type === 'error') {
-          document.getElementById('test-progress').style.display = 'none';
-          document.getElementById('results-area').innerHTML = `<div class="alert alert-error">Test failed: ${data.error}</div>`;
-          eventSource.close();
-        }
-      };
+        <!-- Left: Configuration Form -->
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Test Configuration</span>
+            <div style="display:flex;gap:6px;">
+              <select id="quickPresetSelect" style="width:auto;padding:4px 8px;font-size:12px;" onchange="loadSelectedPreset(this.value)">
+                <option value="">Load Preset...</option>
+              </select>
+            </div>
+          </div>
+          <div class="card-body">
+            
+            <div class="form-group">
+              <label>Execution Mode</label>
+              <select id="runMode" onchange="onModeChange()">
+                <option value="run">Standard Load Test (Controlled Concurrency & RPS)</option>
+                <option value="spike">Spike Test (Baseline → Sudden Spike → Recovery)</option>
+                <option value="soak">Soak Test (Sustained Load over Time)</option>
+                <option value="stress">Stress Test (Gradual Capacity Ramp-up)</option>
+              </select>
+            </div>
 
-      eventSource.addEventListener('message', messageHandler);
-      eventSource.onerror = () => {
-        eventSource.close();
-      };
-
-      // Fetch with config
-      fetch('/api/run', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ config, reportName })
-      });
-    }
-
-    function displayResults(data) {
-      const summary = data.summary || {};
-      const statsHtml = `
-        <div class="stats-grid">
-          <div class="stat-box">
-            <div class="stat-label">Total Requests</div>
-            <div class="stat-value">${(summary.totalRequests || 0).toLocaleString()}</div>
-          </div>
-          <div class="stat-box">
-            <div class="stat-label">Success Rate</div>
-            <div class="stat-value">${summary.totalRequests > 0 ? Math.round((summary.successCount / summary.totalRequests) * 100) : 0}%</div>
-          </div>
-          <div class="stat-box">
-            <div class="stat-label">Avg Latency</div>
-            <div class="stat-value">${(summary.avgLatency || 0).toFixed(0)}ms</div>
-          </div>
-        </div>
-        <div class="stats-grid">
-          <div class="stat-box">
-            <div class="stat-label">Success Count</div>
-            <div class="stat-value">${(summary.successCount || 0).toLocaleString()}</div>
-          </div>
-          <div class="stat-box">
-            <div class="stat-label">P95 Latency</div>
-            <div class="stat-value">${(summary.p95Latency || 0).toFixed(0)}ms</div>
-          </div>
-          <div class="stat-box">
-            <div class="stat-label">P99 Latency</div>
-            <div class="stat-value">${(summary.p99Latency || 0).toFixed(0)}ms</div>
-          </div>
-        </div>
-      `;
-      
-      document.getElementById('results-area').innerHTML = statsHtml;
-      
-      if (data.reportName) {
-        const reportHtml = `
-          <div style="margin-top: 20px; padding: 15px; background: var(--bg-tertiary); border-radius: 10px; border: 1px solid var(--border);">
-            <p style="color: var(--text-secondary); margin-bottom: 10px; font-size: 14px;">
-              <span class="badge badge-success">Complete</span>
-              Report saved: <strong>${data.reportName}</strong>
-            </p>
-            <p style="color: var(--text-tertiary); font-size: 12px;">
-              Reports location: <code style="background: var(--bg-secondary); padding: 4px 8px; border-radius: 4px; border: 1px solid var(--border);">reports/</code>
-            </p>
-          </div>
-        `;
-        document.getElementById('results-area').innerHTML += reportHtml;
-      }
-    }
-
-    function loadHistory() {
-      fetch('/api/reports')
-        .then(r => r.json())
-        .then(reports => {
-          const historyEl = document.getElementById('history-list');
-          if (reports.length === 0) {
-            historyEl.innerHTML = '<p style="color: var(--text-tertiary); text-align: center; padding: 20px;">No tests run yet</p>';
-          } else {
-            historyEl.innerHTML = `<div class="history-list">${reports.map(r => `
-              <div class="history-item">
-                <div>
-                  <strong style="color: var(--text-primary);">${r.name}</strong>
-                  <br>
-                  <small style="color: var(--text-tertiary);">${new Date(r.date).toLocaleString()}</small>
-                </div>
-                <span class="badge badge-success">Completed</span>
+            <div class="form-group">
+              <label>Target URL *</label>
+              <input type="url" id="targetUrl" placeholder="http://127.0.0.1:8080/fast" value="http://127.0.0.1:8080/fast">
+              <div style="display:flex;gap:6px;margin-top:6px;">
+                <button type="button" class="btn btn-secondary btn-sm" onclick="setTargetUrl('http://127.0.0.1:8080/fast')">Fast (Mock)</button>
+                <button type="button" class="btn btn-secondary btn-sm" onclick="setTargetUrl('http://127.0.0.1:8080/slow?delay=80')">Slow 80ms (Mock)</button>
+                <button type="button" class="btn btn-secondary btn-sm" onclick="setTargetUrl('http://127.0.0.1:8080/rate-limit?limit=15&window=5')">Rate Limit (Mock)</button>
               </div>
-            `).join('')}</div>`;
-          }
-        });
+            </div>
+
+            <div class="form-row-4">
+              <div class="form-group">
+                <label>Duration (s) *</label>
+                <input type="number" id="targetDuration" value="10" min="1" max="600">
+              </div>
+              <div class="form-group">
+                <label>Concurrency *</label>
+                <input type="number" id="targetConcurrency" value="5" min="1" max="100">
+              </div>
+              <div class="form-group">
+                <label>Target RPS *</label>
+                <input type="number" id="targetRps" value="10" min="1" max="200">
+              </div>
+              <div class="form-group">
+                <label>Jitter (ms)</label>
+                <input type="number" id="targetJitter" value="0" min="0" max="1000" placeholder="0">
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label>HTTP Method</label>
+                <select id="targetMethod" onchange="onMethodChange()">
+                  <option value="GET">GET</option>
+                  <option value="POST">POST</option>
+                  <option value="PUT">PUT</option>
+                  <option value="DELETE">DELETE</option>
+                  <option value="PATCH">PATCH</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label>Authentication</label>
+                <select id="authType" onchange="onAuthTypeChange()">
+                  <option value="none">None</option>
+                  <option value="bearer">Bearer Token</option>
+                  <option value="basic">Basic Auth</option>
+                  <option value="apikey">API Key Header</option>
+                </select>
+              </div>
+            </div>
+
+            <div id="authCredentialsBox" style="display:none;margin-bottom:16px;">
+              <div id="authBearerRow" style="display:none;">
+                <label>Bearer Token</label>
+                <input type="text" id="authBearerToken" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...">
+              </div>
+              <div id="authBasicRow" style="display:none;" class="form-row">
+                <div>
+                  <label>Username</label>
+                  <input type="text" id="authBasicUser" placeholder="admin">
+                </div>
+                <div>
+                  <label>Password</label>
+                  <input type="text" id="authBasicPass" placeholder="password">
+                </div>
+              </div>
+              <div id="authApiKeyRow" style="display:none;" class="form-row">
+                <div>
+                  <label>Header Name</label>
+                  <input type="text" id="authApiKeyName" value="X-API-Key">
+                </div>
+                <div>
+                  <label>API Key Value</label>
+                  <input type="text" id="authApiKeyValue" placeholder="key_live_...">
+                </div>
+              </div>
+            </div>
+
+            <!-- Custom Headers Key-Value Table -->
+            <div class="form-group">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                <label style="margin:0;">Custom Headers</label>
+                <button type="button" class="btn btn-secondary btn-sm" onclick="addHeaderRow()">+ Add Header</button>
+              </div>
+              <div id="headersContainer">
+                <!-- Dynamic Header Rows -->
+              </div>
+            </div>
+
+            <!-- Request Body -->
+            <div class="form-group" id="bodyGroup" style="display:none;">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                <label style="margin:0;">Request Body (JSON)</label>
+                <button type="button" class="btn btn-secondary btn-sm" onclick="formatBodyJson()">Format JSON</button>
+              </div>
+              <textarea id="targetBody" rows="4" style="font-family:var(--font-mono);font-size:12px;" placeholder='{"key": "value"}'></textarea>
+            </div>
+
+            <div class="form-group">
+              <div style="display:flex;justify-content:space-between;align-items:center;">
+                <label style="margin:0;">Advanced JSON Spec</label>
+                <button type="button" class="btn btn-secondary btn-sm" onclick="toggleAdvancedJson()">Toggle Editor</button>
+              </div>
+              <div id="advancedJsonBox" style="display:none;margin-top:8px;">
+                <textarea id="advancedJsonText" rows="10" style="font-family:var(--font-mono);font-size:12px;"></textarea>
+                <div class="input-hint">Configure stages, thresholds, response assertions, setup steps, or variable extractions.</div>
+              </div>
+            </div>
+
+            <!-- Parameterized Data Feed (CSV) -->
+            <div class="form-group">
+              <div style="display:flex;justify-content:space-between;align-items:center;">
+                <label style="margin:0;">Data Feed (CSV Parameterization)</label>
+                <button type="button" class="btn btn-secondary btn-sm" onclick="toggleCsvDataBox()">Toggle Data Feed</button>
+              </div>
+              <div id="csvDataBox" style="display:none;margin-top:8px;">
+                <textarea id="csvDataText" rows="4" style="font-family:var(--font-mono);font-size:12px;" placeholder="userId,tier,query&#10;101,gold,shoes&#10;102,silver,jackets"></textarea>
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;">
+                  <span class="input-hint">Use <code>{{data.column}}</code> in URL, headers, or body.</span>
+                  <button type="button" class="btn btn-secondary btn-sm" onclick="previewCsvData()">Parse & Check</button>
+                </div>
+                <div id="csvDataSummary" style="font-size:11px;color:var(--accent);margin-top:4px;display:none;"></div>
+              </div>
+            </div>
+
+            <div class="form-group" style="padding-top:10px;border-top:1px solid var(--border-subtle);">
+              <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <button type="button" class="btn btn-secondary" style="flex:1;" onclick="validateActiveConfig()">Validate</button>
+                <button type="button" class="btn btn-secondary" style="flex:1;" onclick="previewActivePlan()">Plan</button>
+                <button type="button" class="btn btn-secondary" style="flex:1;" id="btnProbeEndpoint" onclick="probeActiveEndpoint()" title="Send 1 request to check status, latency & body">
+                  <span>🔍</span> Probe
+                </button>
+                <button type="button" class="btn btn-secondary" style="flex:1;" onclick="openCiExportModal()" title="Export GitHub Actions / GitLab CI pipeline">
+                  <span>⚙️</span> CI/CD
+                </button>
+                <button type="button" class="btn btn-primary" id="btnExecuteTest" style="flex:2;" onclick="startLoadTest()">
+                  <span>🚀</span> Run Test
+                </button>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- Right: Execution Monitor & Metrics -->
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Live Execution & Metrics</span>
+            <div id="runStatusBadge" class="badge badge-neutral">Ready</div>
+          </div>
+          <div class="card-body">
+            
+            <div class="progress-bar" id="execProgressBar">
+              <div class="progress-fill" id="execProgressFill"></div>
+            </div>
+
+            <!-- Stats KPI Cards -->
+            <div class="stats-grid">
+              <div class="stat-card">
+                <div class="stat-label">Total Requests</div>
+                <div class="stat-val highlight" id="statRequests">—</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-label">Achieved RPS</div>
+                <div class="stat-val" id="statRps">—</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-label">Error Rate</div>
+                <div class="stat-val" id="statErrorRate">—</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-label">Avg Latency</div>
+                <div class="stat-val" id="statAvgLat">—</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-label">p95 Latency</div>
+                <div class="stat-val" id="statP95Lat">—</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-label">p99 Latency</div>
+                <div class="stat-val" id="statP99Lat">—</div>
+              </div>
+            </div>
+
+            <!-- Chart -->
+            <div class="chart-box" id="chartSection" style="display:none;">
+              <div style="font-size:12px;font-weight:600;color:var(--text-dim);margin-bottom:8px;text-transform:uppercase;">
+                Latency Percentiles Profile (ms)
+              </div>
+              <div style="height:200px;position:relative;">
+                <canvas id="latencyChart"></canvas>
+              </div>
+            </div>
+
+            <!-- Failure & Error Breakdown Card -->
+            <div id="failureBreakdownSection" style="display:none;margin-bottom:16px;background:var(--bg-canvas);border:1px solid rgba(239,68,68,0.3);border-radius:6px;overflow:hidden;">
+              <div style="padding:10px 14px;background:rgba(239,68,68,0.1);display:flex;align-items:center;justify-content:space-between;">
+                <span style="font-weight:700;color:var(--danger);font-size:13px;display:flex;align-items:center;gap:6px;">
+                  <span>⚠️</span> Failure Breakdown
+                </span>
+                <span id="failureTotalBadge" class="badge badge-danger">0 failures</span>
+              </div>
+              <div style="padding:12px;">
+                <div id="failurePills" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;"></div>
+                <div style="font-size:11px;font-weight:600;color:var(--text-dim);margin-bottom:6px;text-transform:uppercase;">Sample Failures</div>
+                <div id="failureSamplesList" style="display:flex;flex-direction:column;gap:6px;"></div>
+              </div>
+            </div>
+
+            <!-- Streaming Terminal -->
+            <div class="console-box">
+              <div class="console-header">
+                <span>CLI Output Stream</span>
+                <div style="display:flex;gap:8px;">
+                  <button type="button" class="btn btn-secondary btn-sm" onclick="clearConsole()">Clear</button>
+                  <button type="button" class="btn btn-secondary btn-sm" onclick="copyConsoleLogs()">Copy Logs</button>
+                </div>
+              </div>
+              <div class="console-body" id="consoleOutput">Waiting for load test execution...</div>
+            </div>
+
+            <!-- Action buttons for completed run -->
+            <div id="completedReportBar" style="display:none;background:var(--bg-subtle);border:1px solid var(--border-default);border-radius:6px;padding:12px 16px;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
+              <div>
+                <span class="badge badge-success">Report Generated</span>
+                <span id="savedReportName" style="font-family:var(--font-mono);font-weight:600;margin-left:8px;"></span>
+              </div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <button class="btn btn-secondary btn-sm" onclick="viewCurrentHtmlReport()">Open HTML</button>
+                <button class="btn btn-secondary btn-sm" onclick="downloadCurrentCsv()">Download CSV</button>
+                <button class="btn btn-secondary btn-sm" onclick="viewCurrentMarkdown()">View Markdown</button>
+                <button class="btn btn-secondary btn-sm" onclick="viewCurrentPrometheus()">Prometheus</button>
+                <button class="btn btn-secondary btn-sm" onclick="viewCurrentBadge()">SVG Badge</button>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- 2. A/B DIFFERENTIAL BENCHMARK TAB -->
+    <section id="view-ab" class="tab-view">
+      <div class="workbench-grid">
+        
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">A/B Differential Configuration</span>
+          </div>
+          <div class="card-body">
+            
+            <div class="form-group">
+              <label>Preset Comparison Scenarios</label>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                <button type="button" class="btn btn-secondary btn-sm" onclick="setAbPreset('fast-vs-slow')">Mock Fast vs Slow (40ms)</button>
+                <button type="button" class="btn btn-secondary btn-sm" onclick="setAbPreset('fast-vs-error')">Mock Fast vs 500 Error</button>
+                <button type="button" class="btn btn-secondary btn-sm" onclick="setAbPreset('custom')">Reset</button>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label>Variant A URL (Baseline Reference) *</label>
+              <input type="url" id="abUrlA" value="http://127.0.0.1:8080/fast">
+            </div>
+
+            <div class="form-group">
+              <label>Variant B URL (Candidate / Canary / PR) *</label>
+              <input type="url" id="abUrlB" value="http://127.0.0.1:8080/slow?delay=40">
+            </div>
+
+            <div class="form-row-3">
+              <div class="form-group">
+                <label>Duration (s) *</label>
+                <input type="number" id="abDuration" value="5" min="1" max="600">
+              </div>
+              <div class="form-group">
+                <label>Concurrency *</label>
+                <input type="number" id="abConcurrency" value="2" min="1" max="100">
+              </div>
+              <div class="form-group">
+                <label>Target RPS *</label>
+                <input type="number" id="abRps" value="5" min="1" max="200">
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label>Max Latency Regression (%)</label>
+                <input type="number" id="abMaxLatencyDiff" value="20" min="1" max="500">
+                <div class="input-hint">Fails with exit code 2 if B is slower than this %</div>
+              </div>
+              <div class="form-group">
+                <label>Max Error Delta (%)</label>
+                <input type="number" id="abMaxErrorDiff" value="0" min="0" max="100">
+              </div>
+            </div>
+
+            <div class="form-group" style="padding-top:10px;border-top:1px solid var(--border-subtle);">
+              <button type="button" class="btn btn-primary" style="width:100%;" id="btnRunAb" onclick="startAbBenchmark()">
+                <span>⚖️</span> Run A/B Differential Benchmark
+              </button>
+            </div>
+
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">A/B Comparison Results</span>
+            <div id="abStatusBadge" class="badge badge-neutral">Ready</div>
+          </div>
+          <div class="card-body">
+            
+            <div id="abResultsContent">
+              <div style="text-align:center;padding:40px 20px;color:var(--text-dim);">
+                Configure Variant A and Variant B, then run the benchmark to compare performance and detect latency regressions.
+              </div>
+            </div>
+
+            <div class="chart-box" id="abChartSection" style="display:none;margin-top:18px;">
+              <div style="font-size:12px;font-weight:600;color:var(--text-dim);margin-bottom:8px;text-transform:uppercase;">
+                Side-by-Side Latency Comparison (ms)
+              </div>
+              <div style="height:220px;position:relative;">
+                <canvas id="abChart"></canvas>
+              </div>
+            </div>
+
+            <div class="console-box" style="margin-top:18px;">
+              <div class="console-header">A/B Runner Output</div>
+              <div class="console-body" id="abConsoleOutput">Waiting for A/B execution...</div>
+            </div>
+
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- 3. COMPARE RUNS TAB -->
+    <section id="view-compare" class="tab-view">
+      <div class="card" style="margin-bottom:20px;">
+        <div class="card-header">
+          <span class="card-title">Compare Any Two Historical Reports</span>
+        </div>
+        <div class="card-body">
+          <div class="form-row" style="align-items:flex-end;">
+            <div class="form-group">
+              <label>Report A (Baseline)</label>
+              <select id="compareReportA"></select>
+            </div>
+            <div class="form-group">
+              <label>Report B (Comparison)</label>
+              <select id="compareReportB"></select>
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+              <button class="btn btn-primary" onclick="runReportComparison()">Compare Reports</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="comparisonDiffResults">
+        <div class="card">
+          <div class="card-body" style="text-align:center;color:var(--text-dim);padding:40px;">
+            Select two past test reports above and click Compare to evaluate regression and performance variance.
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. IMPORT & PRESETS TAB -->
+    <section id="view-presets" class="tab-view">
+      
+      <!-- Import Tools Section -->
+      <div class="card" style="margin-bottom:24px;">
+        <div class="card-header">
+          <span class="card-title">Import from External Specifications</span>
+        </div>
+        <div class="card-body">
+          
+          <!-- cURL Import -->
+          <div style="margin-bottom:20px;">
+            <label>Import from cURL Command</label>
+            <div style="display:flex;gap:10px;">
+              <input type="text" id="curlInput" style="font-family:var(--font-mono);font-size:13px;" placeholder="curl -X POST http://127.0.0.1:8080/echo -H 'Content-Type: application/json' -d '{&quot;test&quot;:&quot;value&quot;}'">
+              <button class="btn btn-secondary" onclick="parseAndApplyCurl()">Import cURL</button>
+            </div>
+          </div>
+
+          <!-- Postman & OpenAPI Import -->
+          <div class="form-row">
+            <div>
+              <label>Postman Collection (JSON)</label>
+              <textarea id="postmanInput" rows="4" style="font-family:var(--font-mono);font-size:12px;" placeholder="Paste Postman Collection v2/v2.1 JSON here..."></textarea>
+              <button class="btn btn-secondary btn-sm" style="margin-top:6px;" onclick="importPostmanJson()">Import Postman Collection</button>
+            </div>
+            <div>
+              <label>OpenAPI / Swagger Spec (JSON)</label>
+              <textarea id="openApiInput" rows="4" style="font-family:var(--font-mono);font-size:12px;" placeholder="Paste OpenAPI 3.0 or Swagger 2.0 JSON here..."></textarea>
+              <button class="btn btn-secondary btn-sm" style="margin-top:6px;" onclick="importOpenApiJson()">Import OpenAPI Spec</button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <div style="margin-bottom:16px;">
+        <h2 style="font-size:16px;margin-bottom:6px;">Ready-to-Use Test Presets</h2>
+        <p style="color:var(--text-muted);font-size:13px;">
+          Built-in test configurations included with Safe Load Lab.
+        </p>
+      </div>
+
+      <div class="preset-grid" id="presetsContainer">
+        <!-- Rendered dynamically -->
+      </div>
+    </section>
+
+    <!-- 5. TEST HISTORY & REPORTS TAB -->
+    <section id="view-history" class="tab-view">
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Generated Test Reports</span>
+          <div style="display:flex;gap:10px;">
+            <input type="text" id="historySearch" placeholder="Filter reports..." style="width:200px;padding:4px 8px;font-size:12px;" oninput="filterHistoryList()">
+            <button class="btn btn-secondary btn-sm" onclick="loadHistory()">Refresh</button>
+          </div>
+        </div>
+        <div id="historyListContainer">
+          <!-- Rendered dynamically -->
+        </div>
+      </div>
+    </section>
+
+    <!-- 6. DOCUMENTATION & REFERENCE TAB -->
+    <section id="view-docs" class="tab-view">
+      <div class="card" style="max-width:960px;margin:0 auto;">
+        <div class="card-header">
+          <span class="card-title">Safe Load Lab - Technical Reference</span>
+        </div>
+        <div class="card-body" style="line-height:1.7;color:#cbd5e1;">
+          
+          <h3 style="color:#fff;margin:10px 0;">Controlled Performance Engineering</h3>
+          <p style="margin-bottom:16px;">
+            Safe Load Lab is a local, self-contained load-testing tool and A/B regression gate for developers and DevOps teams.
+            It runs completely on your machine with zero external cloud dependencies or SaaS accounts.
+          </p>
+
+          <h4 style="color:#fff;margin:16px 0 8px;">Key CLI Commands</h4>
+          <table class="data-table" style="margin-bottom:16px;">
+            <thead>
+              <tr><th>Command</th><th>Purpose</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>sll run --config &lt;file&gt; --i-own-this-target</code></td><td>Execute controlled staged load test</td></tr>
+              <tr><td><code>sll ab --url-a &lt;A&gt; --url-b &lt;B&gt; --i-own-this-target</code></td><td>Run automated A/B differential benchmark with regression gates</td></tr>
+              <tr><td><code>sll mock --port 8080</code></td><td>Start local hermetic mock HTTP server for zero-flake tests</td></tr>
+              <tr><td><code>sll import-curl "&lt;curl&gt;"</code></td><td>Convert browser cURL to reproducible test JSON</td></tr>
+              <tr><td><code>sll import-postman &lt;file.json&gt;</code></td><td>Convert Postman Collection v2/v2.1 to test JSON</td></tr>
+              <tr><td><code>sll import-openapi &lt;file.json&gt;</code></td><td>Convert OpenAPI/Swagger spec to test JSON</td></tr>
+              <tr><td><code>sll spike / soak / stress</code></td><td>Specialized traffic patterns (sudden surge, sustained soak, ramp)</td></tr>
+              <tr><td><code>sll compare &lt;file1&gt; &lt;file2&gt;</code></td><td>Compare two test reports side-by-side</td></tr>
+              <tr><td><code>sll validate / plan</code></td><td>Verify configuration & resolve plan without sending traffic</td></tr>
+            </tbody>
+          </table>
+
+          <h4 style="color:#fff;margin:16px 0 8px;">Export Options & CI/CD</h4>
+          <table class="data-table" style="margin-bottom:16px;">
+            <thead>
+              <tr><th>Flag</th><th>Description</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>--out &lt;file.json&gt;</code></td><td>Structured JSON report with percentiles & results</td></tr>
+              <tr><td><code>--html &lt;file.html&gt;</code></td><td>Standalone self-contained HTML dashboard report</td></tr>
+              <tr><td><code>--csv &lt;file.csv&gt;</code></td><td>Per-request latency, timestamp, status code export</td></tr>
+              <tr><td><code>--markdown &lt;file.md&gt;</code></td><td>Markdown summary tables (appends to <code>$GITHUB_STEP_SUMMARY</code> in CI)</td></tr>
+              <tr><td><code>--prometheus &lt;file.prom&gt;</code></td><td>OpenMetrics / Prometheus exposition text format for Grafana</td></tr>
+              <tr><td><code>--badge &lt;file.svg&gt;</code></td><td>SVG status badge for repository README</td></tr>
+              <tr><td><code>--env-file &lt;.env&gt;</code></td><td>Load environment variables for <code>{{VAR}}</code> template replacement</td></tr>
+              <tr><td><code>--jitter &lt;ms&gt;</code></td><td>Inject random millisecond delay between requests</td></tr>
+            </tbody>
+          </table>
+
+          <h4 style="color:#fff;margin:16px 0 8px;">Hard Safety Limits</h4>
+          <ul style="padding-left:20px;margin-bottom:16px;">
+            <li>Maximum Test Duration: 600 seconds (10 minutes)</li>
+            <li>Maximum Concurrency: 100 simultaneous workers</li>
+            <li>Maximum RPS: 200 requests per second</li>
+            <li>Maximum Request Body: 1 MB</li>
+            <li>Mandatory Safety Confirmation: <code>--i-own-this-target</code> flag</li>
+          </ul>
+
+        </div>
+      </div>
+    </section>
+
+    <!-- Preflight Probe Modal -->
+    <div id="probeModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:999;align-items:center;justify-content:center;padding:20px;">
+      <div class="card" style="max-width:700px;width:100%;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 40px rgba(0,0,0,0.6);">
+        <div class="card-header" style="justify-content:space-between;">
+          <span class="card-title"><span>🔍</span> Preflight Request Probe</span>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="closeProbeModal()">✕</button>
+        </div>
+        <div class="card-body" style="overflow-y:auto;display:flex;flex-direction:column;gap:12px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;background:var(--bg-canvas);padding:10px 14px;border-radius:6px;border:1px solid var(--border-default);">
+            <div style="font-family:var(--font-mono);font-size:13px;">
+              <span id="probeMethod" style="font-weight:700;color:var(--accent);">GET</span>
+              <span id="probeUrl" style="color:var(--text-main);margin-left:6px;"></span>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px;">
+              <span id="probeStatusBadge" class="badge"></span>
+              <span id="probeLatency" style="font-family:var(--font-mono);font-size:12px;color:var(--text-dim);"></span>
+            </div>
+          </div>
+
+          <div id="probeAssertionsBox" style="display:none;">
+            <div style="font-size:11px;font-weight:600;color:var(--text-dim);text-transform:uppercase;margin-bottom:6px;">Assertions</div>
+            <div id="probeAssertionsList" style="display:flex;flex-direction:column;gap:4px;"></div>
+          </div>
+
+          <div>
+            <div style="font-size:11px;font-weight:600;color:var(--text-dim);text-transform:uppercase;margin-bottom:6px;">Response Headers</div>
+            <div id="probeHeaders" style="font-family:var(--font-mono);font-size:11px;background:var(--bg-canvas);padding:10px;border-radius:6px;border:1px solid var(--border-subtle);max-height:120px;overflow-y:auto;color:var(--text-muted);"></div>
+          </div>
+
+          <div>
+            <div style="font-size:11px;font-weight:600;color:var(--text-dim);text-transform:uppercase;margin-bottom:6px;">Response Body</div>
+            <pre id="probeBody" style="font-family:var(--font-mono);font-size:12px;background:var(--bg-canvas);padding:12px;border-radius:6px;border:1px solid var(--border-subtle);max-height:220px;overflow:auto;color:var(--text-main);white-space:pre-wrap;word-break:break-all;"></pre>
+          </div>
+        </div>
+        <div style="padding:12px 18px;background:var(--bg-subtle);border-top:1px solid var(--border-default);display:flex;justify-content:flex-end;">
+          <button type="button" class="btn btn-primary btn-sm" onclick="closeProbeModal()">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- CI/CD Workflow Export Modal -->
+    <div id="ciModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:999;align-items:center;justify-content:center;padding:20px;">
+      <div class="card" style="max-width:750px;width:100%;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 40px rgba(0,0,0,0.6);">
+        <div class="card-header" style="justify-content:space-between;">
+          <span class="card-title"><span>⚙️</span> Export CI/CD Pipeline</span>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="closeCiModal()">✕</button>
+        </div>
+        <div class="card-body" style="overflow-y:auto;display:flex;flex-direction:column;gap:12px;">
+          <div style="display:flex;gap:10px;">
+            <button type="button" id="ciBtnGithub" class="btn btn-primary btn-sm" onclick="changeCiType('github')">GitHub Actions (.github/workflows/load-test.yml)</button>
+            <button type="button" id="ciBtnGitlab" class="btn btn-secondary btn-sm" onclick="changeCiType('gitlab')">GitLab CI (.gitlab-ci.yml)</button>
+          </div>
+          <textarea id="ciYamlContent" rows="16" readonly style="font-family:var(--font-mono);font-size:12px;background:var(--bg-canvas);color:#38bdf8;padding:12px;border-radius:6px;border:1px solid var(--border-default);resize:none;"></textarea>
+        </div>
+        <div style="padding:12px 18px;background:var(--bg-subtle);border-top:1px solid var(--border-default);display:flex;justify-content:space-between;align-items:center;">
+          <span class="input-hint">Drop this workflow in your repository for automatic SLA enforcement.</span>
+          <div style="display:flex;gap:8px;">
+            <button type="button" class="btn btn-secondary btn-sm" onclick="closeCiModal()">Close</button>
+            <button type="button" class="btn btn-primary btn-sm" onclick="copyCiYaml()">Copy Workflow YAML</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <script>
+    // Global State
+    let latencyChartInstance = null;
+    let abChartInstance = null;
+    let currentReportName = null;
+    let activeReader = null;
+    let activeTimerInterval = null;
+    let testStartTime = 0;
+    let allReports = [];
+    let customHeaders = [];
+
+    // Navigation Switcher
+    function switchNav(tabId) {
+      document.querySelectorAll('.tab-view').forEach(v => v.classList.remove('active'));
+      document.querySelectorAll('.nav-tab-btn').forEach(b => b.classList.remove('active'));
+      
+      const targetView = document.getElementById('view-' + tabId);
+      if (targetView) targetView.classList.add('active');
+
+      const matchingBtn = Array.from(document.querySelectorAll('.nav-tab-btn')).find(b => 
+        b.getAttribute('onclick')?.includes(tabId)
+      );
+      if (matchingBtn) matchingBtn.classList.add('active');
+
+      if (tabId === 'history') loadHistory();
+      if (tabId === 'presets') loadPresetsView();
+      if (tabId === 'compare') populateCompareSelects();
     }
 
-    // cURL command parser for web UI
-    function importCurl() {
-      const curl = document.getElementById('quickCurl').value.trim();
-      if (!curl) return;
-      const urlMatch = curl.match(/https?:\/\/[^\s"']+/);
-      if (urlMatch) {
-        document.getElementById('quickUrl').value = urlMatch[0];
-      }
-      document.getElementById('alerts-quick').innerHTML = '<div class="alert alert-success">✓ cURL target imported into configuration</div>';
+    function setTargetUrl(url) {
+      document.getElementById('targetUrl').value = url;
     }
 
-    // Mock Server Client Management
-    let mockRunning = false;
+    // Mock Server Client Controller
+    let isMockRunning = false;
+    let mockPort = 8080;
+
     function checkMockStatus() {
       fetch('/api/mock/status')
         .then(r => r.json())
         .then(data => {
-          mockRunning = data.running;
-          const dot = document.getElementById('mockStatusDot');
-          const badge = document.getElementById('mockStatusBadge');
-          if (!dot || !badge) return;
-          if (data.running) {
-            dot.style.background = '#10b981';
-            dot.style.boxShadow = '0 0 8px #10b981';
-            badge.style.background = 'rgba(16,185,129,0.2)';
-            badge.style.color = '#10b981';
-            badge.textContent = `Running on :${data.port}`;
+          isMockRunning = data.running;
+          mockPort = data.port;
+          const dot = document.getElementById('mockDot');
+          const label = document.getElementById('mockLabel');
+          const btn = document.getElementById('btnToggleMock');
+
+          if (isMockRunning) {
+            dot.classList.add('active');
+            label.textContent = `Mock :${mockPort}`;
+            btn.textContent = 'Stop';
+            btn.className = 'btn btn-danger btn-sm';
           } else {
-            dot.style.background = '#ef4444';
-            dot.style.boxShadow = '0 0 8px #ef4444';
-            badge.style.background = 'rgba(239,68,68,0.2)';
-            badge.style.color = '#ef4444';
-            badge.textContent = 'Stopped';
+            dot.classList.remove('active');
+            label.textContent = `Mock :${mockPort}`;
+            btn.textContent = 'Start';
+            btn.className = 'btn btn-secondary btn-sm';
           }
         })
         .catch(() => {});
     }
 
     function toggleMockServer() {
-      const endpoint = mockRunning ? '/api/mock/stop' : '/api/mock/start';
+      const endpoint = isMockRunning ? '/api/mock/stop' : '/api/mock/start';
       fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ port: 8080 })
       })
       .then(r => r.json())
-      .then(() => {
-        checkMockStatus();
+      .then(() => checkMockStatus());
+    }
+
+    // Auth & Headers Helpers
+    function onMethodChange() {
+      const method = document.getElementById('targetMethod').value;
+      const bodyGroup = document.getElementById('bodyGroup');
+      bodyGroup.style.display = ['POST', 'PUT', 'PATCH'].includes(method) ? 'block' : 'none';
+    }
+
+    function onAuthTypeChange() {
+      const auth = document.getElementById('authType').value;
+      const box = document.getElementById('authCredentialsBox');
+      const bearerRow = document.getElementById('authBearerRow');
+      const basicRow = document.getElementById('authBasicRow');
+      const apiKeyRow = document.getElementById('authApiKeyRow');
+
+      box.style.display = auth === 'none' ? 'none' : 'block';
+      bearerRow.style.display = auth === 'bearer' ? 'block' : 'none';
+      basicRow.style.display = auth === 'basic' ? 'grid' : 'none';
+      apiKeyRow.style.display = auth === 'apikey' ? 'grid' : 'none';
+    }
+
+    function addHeaderRow(key = '', val = '') {
+      const container = document.getElementById('headersContainer');
+      const div = document.createElement('div');
+      div.className = 'header-row';
+      div.innerHTML = `
+        <input type="text" placeholder="Header Name (e.g. Accept)" value="${key}" style="flex:1;" class="hdr-key">
+        <input type="text" placeholder="Header Value" value="${val}" style="flex:1;" class="hdr-val">
+        <button type="button" class="btn btn-danger btn-sm" onclick="this.parentElement.remove()">✕</button>
+      `;
+      container.appendChild(div);
+    }
+
+    function formatBodyJson() {
+      const el = document.getElementById('targetBody');
+      try {
+        const parsed = JSON.parse(el.value);
+        el.value = JSON.stringify(parsed, null, 2);
+      } catch (e) {
+        alert('Invalid JSON in body: ' + e.message);
+      }
+    }
+
+    function toggleAdvancedJson() {
+      const box = document.getElementById('advancedJsonBox');
+      if (box.style.display === 'none') {
+        box.style.display = 'block';
+        updateAdvancedJsonFromForm();
+      } else {
+        box.style.display = 'none';
+      }
+    }
+
+    function updateAdvancedJsonFromForm() {
+      const config = getActiveConfig(true);
+      if (config) {
+        document.getElementById('advancedJsonText').value = JSON.stringify(config, null, 2);
+      }
+    }
+
+    function onModeChange() {
+      const mode = document.getElementById('runMode').value;
+      if (mode === 'spike') {
+        document.getElementById('targetDuration').value = 120;
+      } else if (mode === 'soak') {
+        document.getElementById('targetDuration').value = 300;
+      } else if (mode === 'stress') {
+        document.getElementById('targetDuration').value = 300;
+      }
+    }
+
+    // Build configuration object
+    function getActiveConfig(forceFromForm = false) {
+      const advancedBox = document.getElementById('advancedJsonBox');
+      if (!forceFromForm && advancedBox.style.display === 'block') {
+        try {
+          return JSON.parse(document.getElementById('advancedJsonText').value);
+        } catch (e) {
+          alert('Invalid JSON in Advanced Configuration: ' + e.message);
+          return null;
+        }
+      }
+
+      const url = document.getElementById('targetUrl').value.trim();
+      const method = document.getElementById('targetMethod').value;
+      const duration = parseInt(document.getElementById('targetDuration').value, 10);
+      const concurrency = parseInt(document.getElementById('targetConcurrency').value, 10);
+      const rps = parseInt(document.getElementById('targetRps').value, 10);
+      const jitterMs = parseInt(document.getElementById('targetJitter').value, 10) || 0;
+
+      if (!url) {
+        alert('Please enter a Target URL');
+        return null;
+      }
+
+      // Collect custom headers
+      const headers = {};
+      document.querySelectorAll('#headersContainer .header-row').forEach(row => {
+        const k = row.querySelector('.hdr-key')?.value.trim();
+        const v = row.querySelector('.hdr-val')?.value.trim();
+        if (k) headers[k] = v;
+      });
+
+      // Collect auth headers
+      const auth = document.getElementById('authType').value;
+      if (auth === 'bearer') {
+        const token = document.getElementById('authBearerToken').value.trim();
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+      } else if (auth === 'basic') {
+        const u = document.getElementById('authBasicUser').value.trim();
+        const p = document.getElementById('authBasicPass').value.trim();
+        if (u) headers['Authorization'] = `Basic ${btoa(u + ':' + p)}`;
+      } else if (auth === 'apikey') {
+        const k = document.getElementById('authApiKeyName').value.trim();
+        const v = document.getElementById('authApiKeyValue').value.trim();
+        if (k && v) headers[k] = v;
+      }
+
+      // Collect body
+      let body = null;
+      if (['POST', 'PUT', 'PATCH'].includes(method)) {
+        const rawBody = document.getElementById('targetBody').value.trim();
+        if (rawBody) {
+          body = rawBody;
+          if (!headers['Content-Type']) headers['Content-Type'] = 'application/json';
+        }
+      }
+
+      return {
+        name: `load-test-${method}-${duration}s`,
+        durationSeconds: duration,
+        concurrency,
+        rps,
+        jitterMs,
+        timeoutMs: 10000,
+        endpoints: [
+          { name: "endpoint", url, method, headers, body, weight: 1 }
+        ],
+        data: parsedCsvRows && parsedCsvRows.length ? parsedCsvRows : undefined
+      };
+    }
+
+    function validateActiveConfig() {
+      const config = getActiveConfig();
+      if (!config) return;
+
+      appendConsole('[ACTION] Validating configuration via CLI...\n');
+      fetch('/api/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config)
+      })
+      .then(r => r.json())
+      .then(res => {
+        if (res.valid) {
+          appendConsole('✓ Configuration valid! All hard safety bounds satisfied.\n');
+          alert('✓ Configuration is valid and safe to execute.');
+        } else {
+          appendConsole(`✗ Validation Error: ${res.error}\n`);
+          alert('Validation Error: ' + res.error);
+        }
+      })
+      .catch(err => {
+        appendConsole(`✗ Network error: ${err.message}\n`);
       });
     }
 
-    function fillMockEndpoints() {
-      document.getElementById('quickUrl').value = 'http://localhost:8080/fast';
-      document.getElementById('abUrlA').value = 'http://localhost:8080/fast';
-      document.getElementById('abUrlB').value = 'http://localhost:8080/slow?delay=40';
-      if (!mockRunning) {
-        toggleMockServer();
+    function previewActivePlan() {
+      const config = getActiveConfig();
+      if (!config) return;
+
+      appendConsole('[ACTION] Generating resolved execution plan...\n');
+      fetch('/api/plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config)
+      })
+      .then(r => r.json())
+      .then(res => {
+        if (res.success) {
+          appendConsole(`\n--- RESOLVED EXECUTION PLAN ---\n${res.plan}\n-------------------------------\n`);
+        } else {
+          appendConsole(`✗ Plan Generation Error: ${res.error}\n`);
+        }
+      })
+      .catch(err => {
+        appendConsole(`✗ Network error: ${err.message}\n`);
+      });
+    }
+
+    function appendConsole(text) {
+      const el = document.getElementById('consoleOutput');
+      if (el.textContent === 'Waiting for load test execution...') {
+        el.textContent = '';
+      }
+      el.textContent += text;
+      el.scrollTop = el.scrollHeight;
+    }
+
+    function clearConsole() {
+      document.getElementById('consoleOutput').textContent = '';
+    }
+
+    function copyConsoleLogs() {
+      const text = document.getElementById('consoleOutput').textContent;
+      navigator.clipboard.writeText(text).then(() => {
+        alert('Console logs copied to clipboard.');
+      });
+    }
+
+    // Load Test Runner
+    function startLoadTest() {
+      const config = getActiveConfig();
+      if (!config) return;
+
+      const mode = document.getElementById('runMode').value;
+      const reportName = `test-${mode}-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+      currentReportName = reportName;
+
+      clearConsole();
+      document.getElementById('execProgressBar').classList.add('active');
+      document.getElementById('execProgressFill').style.width = '10%';
+      document.getElementById('completedReportBar').style.display = 'none';
+      document.getElementById('btnExecuteTest').disabled = true;
+
+      const banner = document.getElementById('activeRunBanner');
+      banner.classList.add('show');
+      document.getElementById('bannerTestName').textContent = `${mode.toUpperCase()} on ${config.endpoints?.[0]?.url || 'Target'}`;
+      testStartTime = Date.now();
+      clearInterval(activeTimerInterval);
+      activeTimerInterval = setInterval(() => {
+        const sec = ((Date.now() - testStartTime) / 1000).toFixed(1);
+        document.getElementById('bannerTimer').textContent = `${sec}s`;
+      }, 100);
+
+      document.getElementById('runStatusBadge').textContent = 'Running';
+      document.getElementById('runStatusBadge').className = 'badge badge-warning';
+
+      appendConsole(`[START] Launching Safe Load Lab [${mode.toUpperCase()}] ...\n`);
+
+      fetch('/api/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config, reportName, mode })
+      })
+      .then(response => {
+        if (!response.ok) {
+          return response.json().then(e => { throw new Error(e.error || 'Server error'); });
+        }
+        const reader = response.body.getReader();
+        activeReader = reader;
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        function readStream() {
+          reader.read().then(({ done, value }) => {
+            if (done) {
+              onTestFinished();
+              return;
+            }
+            buffer += decoder.decode(value, { stream: true });
+            const parts = buffer.split('\n\n');
+            buffer = parts.pop();
+
+            for (const part of parts) {
+              const line = part.trim();
+              if (line.startsWith('data: ')) {
+                try {
+                  const data = JSON.parse(line.slice(6));
+                  handleStreamMessage(data);
+                } catch (e) {}
+              }
+            }
+            readStream();
+          }).catch(err => {
+            appendConsole(`\n[STREAM ERROR] ${err.message}\n`);
+            onTestFinished();
+          });
+        }
+        readStream();
+      })
+      .catch(err => {
+        appendConsole(`\n[ERROR] Failed to start test: ${err.message}\n`);
+        onTestFinished();
+      });
+    }
+
+    function handleStreamMessage(data) {
+      if (data.type === 'progress' || data.type === 'stderr') {
+        appendConsole(data.message);
+        const fill = document.getElementById('execProgressFill');
+        const curr = parseInt(fill.style.width || '10', 10);
+        if (curr < 90) fill.style.width = (curr + 5) + '%';
+      } else if (data.type === 'complete') {
+        document.getElementById('execProgressFill').style.width = '100%';
+        if (data.summary) {
+          renderTestMetrics(data.summary);
+        }
+        appendConsole('\n✓ Load test execution finished!\n');
       }
     }
 
-    // A/B Test Runner
-    function runAbTest() {
-      const urlA = document.getElementById('abUrlA').value;
-      const urlB = document.getElementById('abUrlB').value;
-      const duration = parseInt(document.getElementById('abDuration').value);
-      const concurrency = parseInt(document.getElementById('abConcurrency').value);
-      const rps = parseInt(document.getElementById('abRps').value);
-      const maxLatencyDiff = parseInt(document.getElementById('abMaxLatencyDiff').value);
+    function onTestFinished() {
+      document.getElementById('btnExecuteTest').disabled = false;
+      document.getElementById('activeRunBanner').classList.remove('show');
+      clearInterval(activeTimerInterval);
+      document.getElementById('execProgressBar').classList.remove('active');
+      document.getElementById('runStatusBadge').textContent = 'Completed';
+      document.getElementById('runStatusBadge').className = 'badge badge-success';
+
+      if (currentReportName) {
+        document.getElementById('completedReportBar').style.display = 'flex';
+        document.getElementById('savedReportName').textContent = currentReportName;
+      }
+      loadHistory();
+    }
+
+    function abortRunningTest() {
+      fetch('/api/stop', { method: 'POST' })
+        .then(r => r.json())
+        .then(res => {
+          appendConsole(`\n[ABORT] ${res.message}\n`);
+          onTestFinished();
+        });
+    }
+
+    function renderTestMetrics(summary) {
+      document.getElementById('statRequests').textContent = (summary.totals?.requests || 0).toLocaleString();
+      document.getElementById('statRps').textContent = (summary.totals?.achievedRps || 0).toFixed(1);
+      
+      const errRate = (summary.totals?.errorRate || 0) * 100;
+      const errEl = document.getElementById('statErrorRate');
+      errEl.textContent = `${errRate.toFixed(1)}%`;
+      errEl.className = errRate === 0 ? 'stat-val success' : errRate < 5 ? 'stat-val warning' : 'stat-val danger';
+
+      document.getElementById('statAvgLat').textContent = `${(summary.latencyMs?.avg || 0).toFixed(1)}ms`;
+      document.getElementById('statP95Lat').textContent = `${(summary.latencyMs?.p95 || 0).toFixed(1)}ms`;
+      document.getElementById('statP99Lat').textContent = `${(summary.latencyMs?.p99 || 0).toFixed(1)}ms`;
+
+      renderLatencyChart({
+        p50: summary.latencyMs?.p50 || 0,
+        p90: summary.latencyMs?.p90 || 0,
+        p95: summary.latencyMs?.p95 || 0,
+        p99: summary.latencyMs?.p99 || 0,
+        avg: summary.latencyMs?.avg || 0
+      });
+
+      // Failure Breakdown Rendering
+      const failSection = document.getElementById('failureBreakdownSection');
+      if (failSection) {
+        if (summary.errorBreakdown && (summary.totals?.failed || 0) > 0) {
+          failSection.style.display = 'block';
+          document.getElementById('failureTotalBadge').textContent = `${summary.totals.failed} failure(s)`;
+          const eb = summary.errorBreakdown;
+          const pills = [];
+          if (eb.timeouts > 0) pills.push(`<span class="badge badge-danger">${eb.timeouts} Timeouts</span>`);
+          if (eb.http5xx > 0) pills.push(`<span class="badge badge-danger">${eb.http5xx} HTTP 5xx</span>`);
+          if (eb.http4xx > 0) pills.push(`<span class="badge badge-warning">${eb.http4xx} HTTP 4xx</span>`);
+          if (eb.connectionReset > 0) pills.push(`<span class="badge badge-danger">${eb.connectionReset} Conn Drops</span>`);
+          if (eb.other > 0) pills.push(`<span class="badge badge-neutral">${eb.other} Other</span>`);
+          document.getElementById('failurePills').innerHTML = pills.join('');
+
+          const samples = (eb.samples || []).map(s => 
+            `<div style="background:var(--bg-canvas);padding:6px 10px;border-radius:4px;border:1px solid var(--border-subtle);font-family:var(--font-mono);font-size:11px;">
+              <span style="color:var(--danger);font-weight:700;">${s.status ? 'HTTP ' + s.status : 'ERR'}</span> 
+              <span style="color:var(--accent);">${s.method || 'GET'} ${s.endpoint || s.url}</span> 
+              <span style="color:var(--text-dim);">(${s.durationMs}ms)</span> — <span style="color:var(--text-muted);">${s.error || 'Failed'}</span>
+            </div>`
+          );
+          document.getElementById('failureSamplesList').innerHTML = samples.join('') || '<div class="muted">No sample details</div>';
+        } else {
+          failSection.style.display = 'none';
+        }
+      }
+    }
+
+    let parsedCsvRows = null;
+
+    function toggleCsvDataBox() {
+      const el = document.getElementById('csvDataBox');
+      el.style.display = el.style.display === 'none' ? 'block' : 'none';
+    }
+
+    function previewCsvData() {
+      const content = document.getElementById('csvDataText').value.trim();
+      const summaryEl = document.getElementById('csvDataSummary');
+      if (!content) {
+        summaryEl.style.display = 'none';
+        parsedCsvRows = null;
+        return;
+      }
+      fetch('/api/parse-csv', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content })
+      })
+      .then(r => r.json())
+      .then(res => {
+        if (res.error) {
+          alert('CSV error: ' + res.error);
+        } else {
+          parsedCsvRows = res.rows;
+          summaryEl.style.display = 'block';
+          summaryEl.innerHTML = `✓ Parsed <b>${res.count} rows</b> with columns: <code>${res.headers.map(h => '{{data.' + h + '}}').join(', ')}</code>`;
+        }
+      })
+      .catch(err => alert('Failed to parse CSV: ' + err.message));
+    }
+
+    function probeActiveEndpoint() {
+      const config = getActiveConfig();
+      if (!config) return;
+      const ep = config.endpoints?.[0];
+      if (!ep) return alert('No endpoint configured');
+
+      const btn = document.getElementById('btnProbeEndpoint');
+      const oldHtml = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = '<span>⏳</span> Probing...';
+
+      appendConsole(`[PROBE] Sending preflight probe to ${ep.method} ${ep.url} ...\n`);
+
+      fetch('/api/probe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: ep.url,
+          method: ep.method,
+          headers: ep.headers,
+          body: ep.body,
+          assertions: ep.assertions || config.assertions || [],
+          variables: config.variables || {}
+        })
+      })
+      .then(r => r.json())
+      .then(res => {
+        btn.disabled = false;
+        btn.innerHTML = oldHtml;
+        if (res.error && (!res.status || res.status === 0)) {
+          appendConsole(`✗ Probe failed: ${res.error}\n`);
+          alert(`Probe request failed: ${res.error}`);
+          return;
+        }
+        appendConsole(`✓ Probe finished: HTTP ${res.status} in ${res.durationMs}ms (passed: ${res.passed})\n`);
+        openProbeModal(res);
+      })
+      .catch(err => {
+        btn.disabled = false;
+        btn.innerHTML = oldHtml;
+        appendConsole(`✗ Probe error: ${err.message}\n`);
+        alert('Probe network error: ' + err.message);
+      });
+    }
+
+    function openProbeModal(res) {
+      document.getElementById('probeMethod').textContent = res.method || 'GET';
+      document.getElementById('probeUrl').textContent = res.url || '';
+      
+      const badge = document.getElementById('probeStatusBadge');
+      const isSuccess = res.status >= 200 && res.status < 400;
+      badge.textContent = res.status ? `HTTP ${res.status}` : (res.error || 'FAILED');
+      badge.className = isSuccess ? 'badge badge-success' : 'badge badge-danger';
+      document.getElementById('probeLatency').textContent = `${res.durationMs}ms`;
+
+      // Headers
+      const hdrDiv = document.getElementById('probeHeaders');
+      const headers = res.headers || {};
+      const hdrEntries = Object.entries(headers);
+      if (hdrEntries.length) {
+        hdrDiv.innerHTML = hdrEntries.map(([k, v]) => `<div><span style="color:var(--text-main);">${k}:</span> ${v}</div>`).join('');
+      } else {
+        hdrDiv.textContent = '(no headers)';
+      }
+
+      // Body preview
+      const bodyEl = document.getElementById('probeBody');
+      try {
+        const parsed = JSON.parse(res.body);
+        bodyEl.textContent = JSON.stringify(parsed, null, 2);
+      } catch {
+        bodyEl.textContent = res.body || '(empty body)';
+      }
+
+      // Assertions
+      const assertBox = document.getElementById('probeAssertionsBox');
+      const assertList = document.getElementById('probeAssertionsList');
+      if (res.assertions && res.assertions.length) {
+        assertBox.style.display = 'block';
+        assertList.innerHTML = res.assertions.map(a => 
+          `<div style="font-family:var(--font-mono);font-size:11px;color:${a.passed ? 'var(--success)' : 'var(--danger)'};">
+            ${a.passed ? '✓' : '✗'} <b>${a.type}</b>: ${a.message}
+          </div>`
+        ).join('');
+      } else {
+        assertBox.style.display = 'none';
+      }
+
+      document.getElementById('probeModal').style.display = 'flex';
+    }
+
+    function closeProbeModal() {
+      document.getElementById('probeModal').style.display = 'none';
+    }
+
+    let currentCiType = 'github';
+    function openCiExportModal() {
+      changeCiType('github');
+      document.getElementById('ciModal').style.display = 'flex';
+    }
+
+    function closeCiModal() {
+      document.getElementById('ciModal').style.display = 'none';
+    }
+
+    function changeCiType(type) {
+      currentCiType = type;
+      document.getElementById('ciBtnGithub').className = type === 'github' ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm';
+      document.getElementById('ciBtnGitlab').className = type === 'gitlab' ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm';
+      
+      fetch('/api/ci/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type, config: 'load-test.json' })
+      })
+      .then(r => r.json())
+      .then(res => {
+        document.getElementById('ciYamlContent').value = res.yaml;
+      })
+      .catch(err => alert('Failed to generate CI config: ' + err.message));
+    }
+
+    function copyCiYaml() {
+      const yaml = document.getElementById('ciYamlContent').value;
+      navigator.clipboard.writeText(yaml).then(() => {
+        alert('CI/CD pipeline workflow YAML copied to clipboard!');
+      });
+    }
+
+    function renderLatencyChart(data) {
+      document.getElementById('chartSection').style.display = 'block';
+      const ctx = document.getElementById('latencyChart').getContext('2d');
+      if (latencyChartInstance) latencyChartInstance.destroy();
+
+      latencyChartInstance = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: ['p50 (Median)', 'Average', 'p90', 'p95', 'p99'],
+          datasets: [{
+            label: 'Latency (ms)',
+            data: [data.p50, data.avg, data.p90, data.p95, data.p99],
+            backgroundColor: [
+              'rgba(6, 182, 212, 0.7)',
+              'rgba(59, 130, 246, 0.7)',
+              'rgba(245, 158, 11, 0.7)',
+              'rgba(239, 68, 68, 0.7)',
+              'rgba(220, 38, 38, 0.9)'
+            ],
+            borderColor: '#334155',
+            borderWidth: 1,
+            borderRadius: 4
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { grid: { color: '#1e293b' }, ticks: { color: '#94a3b8' } },
+            y: { grid: { color: '#1e293b' }, ticks: { color: '#94a3b8' } }
+          }
+        }
+      });
+    }
+
+    // A/B Benchmark Controller
+    function setAbPreset(preset) {
+      if (preset === 'fast-vs-slow') {
+        document.getElementById('abUrlA').value = 'http://127.0.0.1:8080/fast';
+        document.getElementById('abUrlB').value = 'http://127.0.0.1:8080/slow?delay=40';
+      } else if (preset === 'fast-vs-error') {
+        document.getElementById('abUrlA').value = 'http://127.0.0.1:8080/fast';
+        document.getElementById('abUrlB').value = 'http://127.0.0.1:8080/error?status=500';
+      }
+    }
+
+    function startAbBenchmark() {
+      const urlA = document.getElementById('abUrlA').value.trim();
+      const urlB = document.getElementById('abUrlB').value.trim();
+      const duration = parseInt(document.getElementById('abDuration').value, 10);
+      const concurrency = parseInt(document.getElementById('abConcurrency').value, 10);
+      const rps = parseInt(document.getElementById('abRps').value, 10);
+      const maxLatencyDiff = parseInt(document.getElementById('abMaxLatencyDiff').value, 10);
+      const maxErrorDiff = parseInt(document.getElementById('abMaxErrorDiff').value, 10);
 
       if (!urlA || !urlB) {
-        alert('Please specify both Variant A and Variant B URLs');
+        alert('Please specify both Variant A and Variant B URLs.');
         return;
       }
 
-      const reportName = `ab-${new Date().toISOString().split('T')[0]}-${Date.now()}`;
-      document.getElementById('test-progress').style.display = 'block';
-      document.getElementById('progressFill').style.width = '0%';
+      const reportName = `ab-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+      currentReportName = reportName;
 
-      let progressPercent = 0;
+      document.getElementById('abStatusBadge').textContent = 'Running';
+      document.getElementById('abStatusBadge').className = 'badge badge-warning';
+      document.getElementById('btnRunAb').disabled = true;
+
+      const consoleEl = document.getElementById('abConsoleOutput');
+      consoleEl.textContent = `[START] Running A/B Differential Benchmark...\nVariant A: ${urlA}\nVariant B: ${urlB}\n\n`;
 
       fetch('/api/ab', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ urlA, urlB, duration, concurrency, rps, reportName, maxLatencyDiff })
+        body: JSON.stringify({ urlA, urlB, duration, concurrency, rps, maxLatencyDiff, maxErrorDiff, reportName })
       })
-      .then(r => r.body.getReader())
-      .then(reader => {
+      .then(response => {
+        if (!response.ok) return response.json().then(e => { throw new Error(e.error || 'Server error'); });
+        const reader = response.body.getReader();
         const decoder = new TextDecoder();
-        function readChunk() {
+        let buffer = '';
+
+        function readStream() {
           reader.read().then(({ done, value }) => {
-            if (done) return;
-            const text = decoder.decode(value);
-            const lines = text.split('\n\n');
-            for (const line of lines) {
+            if (done) {
+              document.getElementById('btnRunAb').disabled = false;
+              document.getElementById('abStatusBadge').textContent = 'Completed';
+              document.getElementById('abStatusBadge').className = 'badge badge-success';
+              loadHistory();
+              return;
+            }
+            buffer += decoder.decode(value, { stream: true });
+            const parts = buffer.split('\n\n');
+            buffer = parts.pop();
+
+            for (const part of parts) {
+              const line = part.trim();
               if (line.startsWith('data: ')) {
                 try {
                   const data = JSON.parse(line.slice(6));
-                  if (data.type === 'progress') {
-                    progressPercent = Math.min(progressPercent + 8, 90);
-                    document.getElementById('progressFill').style.width = progressPercent + '%';
+                  if (data.type === 'progress' || data.type === 'stderr') {
+                    consoleEl.textContent += data.message;
+                    consoleEl.scrollTop = consoleEl.scrollHeight;
                   } else if (data.type === 'complete') {
-                    document.getElementById('progressFill').style.width = '100%';
-                    displayAbResults(data);
-                    setTimeout(() => {
-                      document.getElementById('test-progress').style.display = 'none';
-                      loadHistory();
-                    }, 1000);
+                    renderAbResults(data);
                   }
                 } catch (e) {}
               }
             }
-            readChunk();
+            readStream();
+          }).catch(err => {
+            consoleEl.textContent += `\n[ERROR] ${err.message}\n`;
+            document.getElementById('btnRunAb').disabled = false;
           });
         }
-        readChunk();
+        readStream();
       })
       .catch(err => {
-        document.getElementById('test-progress').style.display = 'none';
-        document.getElementById('results-area').innerHTML = `<div class="alert alert-error">A/B Test Error: ${err.message}</div>`;
+        alert('Failed to start A/B test: ' + err.message);
+        document.getElementById('btnRunAb').disabled = false;
       });
     }
 
-    function displayAbResults(data) {
+    function renderAbResults(data) {
       const diff = data.diff;
-      if (!diff) {
-        document.getElementById('results-area').innerHTML = `<div class="alert alert-success">A/B Test Complete. Report: ${data.reportName}</div>`;
+      if (!diff) return;
+
+      const isWinnerB = diff.winner === 'B';
+      const isWinnerA = diff.winner === 'A';
+      const winnerTitle = isWinnerB ? '🏆 Variant B is WINNER (Faster)' :
+                          isWinnerA ? '⚠️ Variant A was Faster (Regression in B)' :
+                          '⚖️ Comparable Performance';
+
+      const bannerClass = isWinnerB ? 'badge-success' : isWinnerA ? 'badge-danger' : 'badge-neutral';
+
+      const html = `
+        <div style="background:var(--bg-subtle);border:1px solid var(--border-default);border-radius:6px;padding:16px;margin-bottom:16px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+            <div style="font-size:15px;font-weight:700;">${winnerTitle}</div>
+            <span class="badge ${bannerClass}">${diff.isRegression ? 'Regression Detected' : 'Thresholds Passed'}</span>
+          </div>
+          ${diff.isRegression ? `<div style="background:var(--danger-dim);border:1px solid var(--danger);color:var(--danger);padding:8px 12px;border-radius:4px;font-size:12px;margin-bottom:12px;">${diff.regressionReason}</div>` : ''}
+          
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Metric</th>
+                <th>Variant A</th>
+                <th>Variant B</th>
+                <th>Delta</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>Requests</strong></td>
+                <td>${diff.requests.a}</td>
+                <td>${diff.requests.b}</td>
+                <td>${diff.requests.diff}</td>
+              </tr>
+              <tr>
+                <td><strong>Achieved RPS</strong></td>
+                <td>${diff.rps.a.toFixed(1)}</td>
+                <td>${diff.rps.b.toFixed(1)}</td>
+                <td>${diff.rps.diff > 0 ? '+' : ''}${diff.rps.diff.toFixed(1)}</td>
+              </tr>
+              <tr>
+                <td><strong>Error Rate</strong></td>
+                <td>${diff.errorRate.a.toFixed(1)}%</td>
+                <td>${diff.errorRate.b.toFixed(1)}%</td>
+                <td style="color:${diff.errorRate.diff > 0 ? 'var(--danger)' : 'var(--success)'};">${diff.errorRate.diff.toFixed(1)}%</td>
+              </tr>
+              <tr>
+                <td><strong>Avg Latency</strong></td>
+                <td>${diff.latencies.avg.a.toFixed(1)}ms</td>
+                <td>${diff.latencies.avg.b.toFixed(1)}ms</td>
+                <td style="color:${diff.latencies.avg.pct <= 0 ? 'var(--success)' : 'var(--danger)'};">${diff.latencies.avg.pct > 0 ? '+' : ''}${diff.latencies.avg.pct.toFixed(1)}%</td>
+              </tr>
+              <tr>
+                <td><strong>p95 Latency</strong></td>
+                <td>${diff.latencies.p95.a.toFixed(1)}ms</td>
+                <td>${diff.latencies.p95.b.toFixed(1)}ms</td>
+                <td style="color:${diff.latencies.p95.pct <= 0 ? 'var(--success)' : 'var(--danger)'};font-weight:700;">${diff.latencies.p95.pct > 0 ? '+' : ''}${diff.latencies.p95.pct.toFixed(1)}%</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div style="display:flex;gap:8px;margin-top:14px;">
+            <a href="/api/reports/${data.reportName}/html" target="_blank" class="btn btn-secondary btn-sm">Open A/B HTML Report</a>
+            <a href="/api/reports/${data.reportName}/markdown" target="_blank" class="btn btn-secondary btn-sm">View Markdown</a>
+          </div>
+        </div>
+      `;
+      document.getElementById('abResultsContent').innerHTML = html;
+      renderAbChart(diff.latencies);
+    }
+
+    function renderAbChart(latencies) {
+      document.getElementById('abChartSection').style.display = 'block';
+      const ctx = document.getElementById('abChart').getContext('2d');
+      if (abChartInstance) abChartInstance.destroy();
+
+      abChartInstance = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: ['Avg Latency', 'p50', 'p90', 'p95', 'p99'],
+          datasets: [
+            {
+              label: 'Variant A (Baseline)',
+              data: [latencies.avg.a, latencies.p50.a, latencies.p90.a, latencies.p95.a, latencies.p99.a],
+              backgroundColor: 'rgba(59, 130, 246, 0.7)',
+              borderColor: '#3b82f6',
+              borderWidth: 1,
+              borderRadius: 4
+            },
+            {
+              label: 'Variant B (Candidate)',
+              data: [latencies.avg.b, latencies.p50.b, latencies.p90.b, latencies.p95.b, latencies.p99.b],
+              backgroundColor: 'rgba(6, 182, 212, 0.7)',
+              borderColor: '#06b6d4',
+              borderWidth: 1,
+              borderRadius: 4
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { labels: { color: '#94a3b8' } } },
+          scales: {
+            x: { grid: { color: '#1e293b' }, ticks: { color: '#94a3b8' } },
+            y: { grid: { color: '#1e293b' }, ticks: { color: '#94a3b8' } }
+          }
+        }
+      });
+    }
+
+    // Compare Two Reports Controller
+    function populateCompareSelects() {
+      fetch('/api/reports')
+        .then(r => r.json())
+        .then(reports => {
+          const selA = document.getElementById('compareReportA');
+          const selB = document.getElementById('compareReportB');
+          selA.innerHTML = '';
+          selB.innerHTML = '';
+
+          reports.filter(r => !r.isAb).forEach((r, idx) => {
+            const optA = document.createElement('option');
+            optA.value = r.name;
+            optA.textContent = `${r.name} (${new Date(r.date).toLocaleDateString()})`;
+            if (idx === 0) optA.selected = true;
+            selA.appendChild(optA);
+
+            const optB = document.createElement('option');
+            optB.value = r.name;
+            optB.textContent = `${r.name} (${new Date(r.date).toLocaleDateString()})`;
+            if (idx === 1) optB.selected = true;
+            selB.appendChild(optB);
+          });
+        });
+    }
+
+    function runReportComparison() {
+      const reportA = document.getElementById('compareReportA').value;
+      const reportB = document.getElementById('compareReportB').value;
+
+      if (!reportA || !reportB) {
+        alert('Please select two reports to compare.');
         return;
       }
 
-      const winnerText = diff.winner === 'B' ? '🏆 Variant B is WINNER (Faster)' :
-                         diff.winner === 'A' ? '⚠️ Variant A was Faster (Regression in B)' :
-                         '⚖️ Comparable Performance';
-      const winnerColor = diff.winner === 'B' ? 'var(--success)' : diff.winner === 'A' ? 'var(--error)' : 'var(--text-primary)';
+      fetch('/api/reports/compare', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reportA, reportB })
+      })
+      .then(r => r.json())
+      .then(data => {
+        if (data.error) {
+          alert('Comparison error: ' + data.error);
+          return;
+        }
 
-      const html = `
-        <div style="background:var(--bg-tertiary);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:20px;">
-          <h3 style="color:${winnerColor};margin-bottom:10px;">${winnerText}</h3>
-          ${diff.isRegression ? `<div class="alert alert-error">Performance Regression: ${diff.regressionReason}</div>` : ''}
-          <div class="stats-grid" style="margin-top:15px;">
-            <div class="stat-box">
-              <div class="stat-label">Variant A Latency (p95)</div>
-              <div class="stat-value">${diff.latencies.p95.a.toFixed(1)}ms</div>
+        const diff = data.diff;
+        const html = `
+          <div class="card">
+            <div class="card-header">
+              <span class="card-title">Comparison: ${reportA} (A) vs ${reportB} (B)</span>
+              <span class="badge ${diff.winner === 'B' ? 'badge-success' : diff.winner === 'A' ? 'badge-danger' : 'badge-neutral'}">
+                ${diff.winner === 'B' ? 'B is Faster' : diff.winner === 'A' ? 'A was Faster' : 'Comparable'}
+              </span>
             </div>
-            <div class="stat-box">
-              <div class="stat-label">Variant B Latency (p95)</div>
-              <div class="stat-value">${diff.latencies.p95.b.toFixed(1)}ms</div>
-            </div>
-            <div class="stat-box">
-              <div class="stat-label">Latency Delta (p95)</div>
-              <div class="stat-value" style="color:${diff.latencies.p95.pct <= 0 ? 'var(--success)' : 'var(--error)'}">${diff.latencies.p95.pct > 0 ? '+' : ''}${diff.latencies.p95.pct.toFixed(1)}%</div>
+            <div class="card-body">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Metric</th>
+                    <th>Report A (Baseline)</th>
+                    <th>Report B (Candidate)</th>
+                    <th>Difference</th>
+                    <th>% Delta</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><strong>Requests</strong></td>
+                    <td>${data.summaryA.totals.requests}</td>
+                    <td>${data.summaryB.totals.requests}</td>
+                    <td>${diff.requests.diff}</td>
+                    <td>${diff.requests.diff > 0 ? '+' : ''}${data.summaryA.totals.requests ? ((diff.requests.diff/data.summaryA.totals.requests)*100).toFixed(1) : 0}%</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Achieved RPS</strong></td>
+                    <td>${data.summaryA.totals.achievedRps.toFixed(2)}</td>
+                    <td>${data.summaryB.totals.achievedRps.toFixed(2)}</td>
+                    <td>${diff.rps.diff > 0 ? '+' : ''}${diff.rps.diff.toFixed(2)}</td>
+                    <td>${diff.rps.diff > 0 ? '+' : ''}${data.summaryA.totals.achievedRps ? ((diff.rps.diff/data.summaryA.totals.achievedRps)*100).toFixed(1) : 0}%</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Error Rate</strong></td>
+                    <td>${(data.summaryA.totals.errorRate*100).toFixed(2)}%</td>
+                    <td>${(data.summaryB.totals.errorRate*100).toFixed(2)}%</td>
+                    <td style="color:${diff.errorRate.diff > 0 ? 'var(--danger)' : 'var(--success)'};">${diff.errorRate.diff > 0 ? '+' : ''}${diff.errorRate.diff.toFixed(2)}%</td>
+                    <td>—</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Avg Latency</strong></td>
+                    <td>${data.summaryA.latencyMs.avg.toFixed(2)}ms</td>
+                    <td>${data.summaryB.latencyMs.avg.toFixed(2)}ms</td>
+                    <td style="color:${diff.latencies.avg.diff <= 0 ? 'var(--success)' : 'var(--danger)'};">${diff.latencies.avg.diff > 0 ? '+' : ''}${diff.latencies.avg.diff.toFixed(2)}ms</td>
+                    <td style="color:${diff.latencies.avg.pct <= 0 ? 'var(--success)' : 'var(--danger)'};">${diff.latencies.avg.pct > 0 ? '+' : ''}${diff.latencies.avg.pct.toFixed(1)}%</td>
+                  </tr>
+                  <tr>
+                    <td><strong>p95 Latency</strong></td>
+                    <td>${data.summaryA.latencyMs.p95.toFixed(2)}ms</td>
+                    <td>${data.summaryB.latencyMs.p95.toFixed(2)}ms</td>
+                    <td style="color:${diff.latencies.p95.diff <= 0 ? 'var(--success)' : 'var(--danger)'};font-weight:700;">${diff.latencies.p95.diff > 0 ? '+' : ''}${diff.latencies.p95.diff.toFixed(2)}ms</td>
+                    <td style="color:${diff.latencies.p95.pct <= 0 ? 'var(--success)' : 'var(--danger)'};font-weight:700;">${diff.latencies.p95.pct > 0 ? '+' : ''}${diff.latencies.p95.pct.toFixed(1)}%</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </div>
-          <p style="color:var(--text-tertiary);font-size:12px;margin-top:10px;">Full reports generated: reports/${data.reportName}.json, .html, .md</p>
-        </div>
-      `;
-      document.getElementById('results-area').innerHTML = html;
+        `;
+        document.getElementById('comparisonDiffResults').innerHTML = html;
+      })
+      .catch(err => {
+        alert('Network error comparing reports: ' + err.message);
+      });
     }
 
-    // Load history and check mock server status on page load
-    loadHistory();
+    // Presets & Importers
+    function loadPresetsView() {
+      fetch('/api/configs')
+        .then(r => r.json())
+        .then(configs => {
+          const container = document.getElementById('presetsContainer');
+          const quickSelect = document.getElementById('quickPresetSelect');
+          
+          quickSelect.innerHTML = '<option value="">Load Preset...</option>';
+          configs.forEach(c => {
+            quickSelect.innerHTML += `<option value="${c.filename}">${c.name || c.filename}</option>`;
+          });
+
+          container.innerHTML = configs.map(c => `
+            <div class="preset-card" onclick="applyPresetToWorkbench('${c.filename}')">
+              <div class="preset-title">
+                <span>${c.name || c.filename}</span>
+                <span class="badge badge-neutral">${c.filename}</span>
+              </div>
+              <div class="preset-desc">Ready configuration for controlled load testing. Click to load into Workbench.</div>
+              <div class="preset-meta">
+                ${c.duration ? `<span>⏱ ${c.duration}s</span>` : ''}
+                ${c.concurrency ? `<span>👥 ${c.concurrency}c</span>` : ''}
+                ${c.rps ? `<span>⚡ ${c.rps} RPS</span>` : ''}
+              </div>
+            </div>
+          `).join('');
+        });
+    }
+
+    function loadSelectedPreset(filename) {
+      if (!filename) return;
+      applyPresetToWorkbench(filename);
+    }
+
+    function applyPresetToWorkbench(filename) {
+      fetch(`/api/configs/${filename}`)
+        .then(r => r.json())
+        .then(config => {
+          document.getElementById('advancedJsonBox').style.display = 'block';
+          document.getElementById('advancedJsonText').value = JSON.stringify(config, null, 2);
+
+          if (config.endpoints?.[0]?.url) {
+            document.getElementById('targetUrl').value = config.endpoints[0].url;
+          }
+          if (config.endpoints?.[0]?.method) {
+            document.getElementById('targetMethod').value = config.endpoints[0].method;
+          }
+          if (config.durationSeconds) {
+            document.getElementById('targetDuration').value = config.durationSeconds;
+          }
+          if (config.concurrency) {
+            document.getElementById('targetConcurrency').value = config.concurrency;
+          }
+          if (config.rps) {
+            document.getElementById('targetRps').value = config.rps;
+          }
+
+          switchNav('workbench');
+          appendConsole(`[PRESET] Loaded "${config.name || filename}" into Workbench.\n`);
+        });
+    }
+
+    function parseAndApplyCurl() {
+      const curl = document.getElementById('curlInput').value.trim();
+      if (!curl) return;
+
+      const urlMatch = curl.match(/https?:\/\/[^\s"']+/);
+      if (!urlMatch) {
+        alert('Could not find HTTP/HTTPS URL in cURL command');
+        return;
+      }
+
+      const url = urlMatch[0];
+      let method = 'GET';
+      const mMatch = curl.match(/(?:-X|--request)\s+([A-Za-z]+)/i);
+      if (mMatch) method = mMatch[1].toUpperCase();
+      else if (curl.includes('-d ') || curl.includes('--data')) method = 'POST';
+
+      document.getElementById('targetUrl').value = url;
+      document.getElementById('targetMethod').value = method;
+      onMethodChange();
+
+      // Extract custom headers
+      const headerRegex = /(?:-H|--header)\s+(?:'([^']+)'|"([^"]+)")/g;
+      let hMatch;
+      document.getElementById('headersContainer').innerHTML = '';
+      while ((hMatch = headerRegex.exec(curl)) !== null) {
+        const raw = hMatch[1] || hMatch[2];
+        const idx = raw.indexOf(':');
+        if (idx !== -1) {
+          addHeaderRow(raw.slice(0, idx).trim(), raw.slice(idx + 1).trim());
+        }
+      }
+
+      // Extract body
+      const dataMatch = curl.match(/(?:-d|--data|--data-raw)\s+(?:'([^']*)'|"([^"]*)")/);
+      if (dataMatch) {
+        document.getElementById('targetBody').value = dataMatch[1] || dataMatch[2] || '';
+      }
+
+      switchNav('workbench');
+      appendConsole(`[CURL] Imported: ${method} ${url}\n`);
+    }
+
+    function importPostmanJson() {
+      const content = document.getElementById('postmanInput').value.trim();
+      if (!content) { alert('Please paste Postman Collection JSON'); return; }
+
+      fetch('/api/import/postman', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content })
+      })
+      .then(r => r.json())
+      .then(config => {
+        if (config.error) { alert('Postman Import Error: ' + config.error); return; }
+        document.getElementById('advancedJsonBox').style.display = 'block';
+        document.getElementById('advancedJsonText').value = JSON.stringify(config, null, 2);
+        if (config.endpoints?.[0]?.url) document.getElementById('targetUrl').value = config.endpoints[0].url;
+        switchNav('workbench');
+        appendConsole(`[IMPORT] Successfully imported ${config.endpoints.length} endpoints from Postman Collection.\n`);
+      });
+    }
+
+    function importOpenApiJson() {
+      const content = document.getElementById('openApiInput').value.trim();
+      if (!content) { alert('Please paste OpenAPI/Swagger JSON'); return; }
+
+      fetch('/api/import/openapi', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content })
+      })
+      .then(r => r.json())
+      .then(config => {
+        if (config.error) { alert('OpenAPI Import Error: ' + config.error); return; }
+        document.getElementById('advancedJsonBox').style.display = 'block';
+        document.getElementById('advancedJsonText').value = JSON.stringify(config, null, 2);
+        if (config.endpoints?.[0]?.url) document.getElementById('targetUrl').value = config.endpoints[0].url;
+        switchNav('workbench');
+        appendConsole(`[IMPORT] Successfully imported ${config.endpoints.length} endpoints from OpenAPI Spec.\n`);
+      });
+    }
+
+    // History and Reports
+    function loadHistory() {
+      fetch('/api/reports')
+        .then(r => r.json())
+        .then(reports => {
+          allReports = reports;
+          document.getElementById('historyCount').textContent = reports.length;
+          renderHistoryItems(reports);
+        });
+    }
+
+    function filterHistoryList() {
+      const q = document.getElementById('historySearch').value.toLowerCase();
+      const filtered = allReports.filter(r => r.name.toLowerCase().includes(q));
+      renderHistoryItems(filtered);
+    }
+
+    function renderHistoryItems(reports) {
+      const container = document.getElementById('historyListContainer');
+      if (!reports.length) {
+        container.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-dim);">No saved reports yet. Run a load test or A/B benchmark to generate reports.</div>';
+        return;
+      }
+
+      container.innerHTML = reports.map(r => {
+        const dateStr = new Date(r.date).toLocaleString();
+        const kb = Math.round((r.sizeBytes || 0) / 1024);
+        const typeBadge = r.isAb ? '<span class="badge badge-warning">A/B Benchmark</span>' : '<span class="badge badge-success">Load Test</span>';
+        
+        let statsSnippet = '';
+        if (r.preview?.type === 'load' && r.preview.requests) {
+          statsSnippet = `<span style="font-family:var(--font-mono);font-size:11px;color:var(--text-muted);">${r.preview.requests} reqs | ${r.preview.rps?.toFixed(1)} rps | p95: ${r.preview.p95?.toFixed(1)}ms</span>`;
+        } else if (r.preview?.type === 'ab') {
+          statsSnippet = `<span style="font-family:var(--font-mono);font-size:11px;color:var(--text-muted);">Winner: ${r.preview.winner} | p95 delta: ${r.preview.pctDelta > 0 ? '+' : ''}${r.preview.pctDelta?.toFixed(1)}%</span>`;
+        }
+
+        return `
+          <div class="history-card">
+            <div style="flex:1;min-width:0;">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+                <strong style="color:var(--text-main);font-size:14px;cursor:pointer;" onclick="inspectReport('${r.name}')">${r.name}</strong>
+                ${typeBadge}
+              </div>
+              <div style="display:flex;align-items:center;gap:12px;font-size:12px;color:var(--text-dim);">
+                <span>${dateStr}</span>
+                <span>${kb} KB</span>
+                ${statsSnippet}
+              </div>
+            </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+              <a href="/api/reports/${r.name}/html" target="_blank" class="btn btn-secondary btn-sm">HTML</a>
+              <a href="/api/reports/${r.name}/csv" class="btn btn-secondary btn-sm">CSV</a>
+              <a href="/api/reports/${r.name}/markdown" target="_blank" class="btn btn-secondary btn-sm">MD</a>
+              <a href="/api/reports/${r.name}/prometheus" target="_blank" class="btn btn-secondary btn-sm">Prometheus</a>
+              <a href="/api/reports/${r.name}/badge" target="_blank" class="btn btn-secondary btn-sm">Badge</a>
+              <button class="btn btn-danger btn-sm" onclick="deleteReport('${r.name}')">✕</button>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function inspectReport(name) {
+      fetch(`/api/reports/${name}`)
+        .then(r => r.json())
+        .then(rep => {
+          if (rep.summary) {
+            renderTestMetrics(rep.summary);
+            switchNav('workbench');
+            currentReportName = name;
+            document.getElementById('completedReportBar').style.display = 'flex';
+            document.getElementById('savedReportName').textContent = name;
+            appendConsole(`[INSPECT] Loaded results from report ${name}\n`);
+          } else if (rep.diff) {
+            renderAbResults(rep);
+            switchNav('ab');
+          }
+        });
+    }
+
+    function deleteReport(name) {
+      if (!confirm(`Delete report ${name}?`)) return;
+      fetch(`/api/reports/${name}`, { method: 'DELETE' })
+        .then(r => r.json())
+        .then(() => loadHistory());
+    }
+
+    function viewCurrentHtmlReport() {
+      if (currentReportName) window.open(`/api/reports/${currentReportName}/html`, '_blank');
+    }
+
+    function downloadCurrentCsv() {
+      if (currentReportName) window.location.href = `/api/reports/${currentReportName}/csv`;
+    }
+
+    function viewCurrentMarkdown() {
+      if (currentReportName) window.open(`/api/reports/${currentReportName}/markdown`, '_blank');
+    }
+
+    function viewCurrentPrometheus() {
+      if (currentReportName) window.open(`/api/reports/${currentReportName}/prometheus`, '_blank');
+    }
+
+    function viewCurrentBadge() {
+      if (currentReportName) window.open(`/api/reports/${currentReportName}/badge`, '_blank');
+    }
+
+    // Init
     checkMockStatus();
-    setInterval(checkMockStatus, 5000);
+    setInterval(checkMockStatus, 4000);
+    loadPresetsView();
+    loadHistory();
   </script>
 </body>
 </html>

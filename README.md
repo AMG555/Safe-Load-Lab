@@ -14,8 +14,7 @@ This is **not** a DDoS tool. It is designed for safe capacity, performance, rate
 - ⚖️ **A/B Differential Load Testing (`sll ab`)**: Compare two endpoints or environments side-by-side with statistical latency delta, RPS comparison, automated winner determination, and performance regression gates for CI/CD.
 - 🧪 **Hermetic Mock Server (`sll mock`)**: Built-in zero-dependency HTTP mock server (`/health`, `/fast`, `/slow`, `/error`, `/rate-limit`, `/echo`, `/json`) for 100% flake-free local testing and CI benchmarks.
 - ⚡ **cURL Import (`sll import-curl` & `--curl`)**: Convert any browser/Postman cURL command directly into a reproducible load test.
-- 📊 **Enhanced Web UI Dashboard**: Interactive dark-mode dashboard with dedicated A/B Testing panel, one-click mock server launcher, and real-time streaming progress.
-- 🛡️ **63 Automated Quality Tests**: 100% passing test coverage across Unit, Integration, Performance, Smoke, A/B, and QA suites.
+- 🛡️ **75 Automated Quality Tests**: 100% passing test coverage across Unit, Integration, Performance, Smoke, A/B, UI Server, and QA suites.
 - ⚙️ **Modern Node 22 Support**: Updated GitHub Actions CI with npm caching, automated mock server startup, and artifact generation.
 
 ## 🎯 Why Safe Load Lab?
@@ -126,8 +125,15 @@ sll plan --config examples/advanced.json --env local
 | Command | Description |
 |---------|-------------|
 | `run` | Run a controlled load test |
+| `probe`, `ping` | Send a single preflight probe request to verify endpoint status, latency, and assertions |
+| `ci` | Generate ready-to-use CI/CD workflow (`github` or `gitlab`) |
+| `ab`, `diff` | Run differential A/B benchmark comparing two endpoints or config profiles |
+| `mock` | Start local hermetic mock server for zero-flake load tests |
+| `import-curl` | Convert cURL command string to Safe Load Lab test config |
+| `import-postman` | Convert Postman Collection JSON to Safe Load Lab test config |
+| `import-openapi` | Convert OpenAPI 3.0 / Swagger 2.0 specification to Safe Load Lab test config |
 | `spike` | Run a spike test (baseline → spike → recovery) |
-| `soak` | Run a soak test (sustained load) |
+| `soak` | Run a soak test (sustained load over time) |
 | `stress` | Run a stress test (gradually increasing load) |
 | `validate` | Validate config without sending traffic |
 | `plan` | Preview resolved test plan without sending traffic |
@@ -136,6 +142,60 @@ sll plan --config examples/advanced.json --env local
 | `compare` | Compare two test reports side-by-side |
 | `version` | Show version |
 | `help` | Show help |
+
+## Preflight Single-Request Probe
+
+Verify connectivity, latency, headers, and response assertions before launching full load tests:
+
+```bash
+# Test single endpoint
+sll probe --url http://localhost:8080/fast
+
+# Test from cURL command
+sll probe --curl "curl -X POST http://localhost:8080/echo -d '{\"status\":\"ok\"}'"
+
+# Test against config file with assertions
+sll probe --config load-test.json
+```
+
+## Parameterized Data Feeds (CSV)
+
+Drive load tests using real dataset rows to prevent database cache skewing:
+
+```bash
+sll run \
+  --url "http://localhost:8080/users/{{data.id}}" \
+  --data users.csv \
+  --duration 30 \
+  --concurrency 5 \
+  --rps 10 \
+  --i-own-this-target
+```
+
+Each row is interpolated into URL, headers, and request body using `{{data.columnName}}`.
+
+## CI/CD Pipeline Integration
+
+Generate automated SLA workflows for GitHub Actions or GitLab CI:
+
+```bash
+# Output GitHub Actions workflow
+sll ci --type github --out .github/workflows/load-test.yml
+
+# Output GitLab CI workflow
+sll ci --type gitlab --out .gitlab-ci.yml
+```
+
+Tests run in CI fail automatically when response times exceed thresholds or error rate limits are breached.
+
+## Hermetic Local Mock Server
+
+Run reproducible tests locally with zero third-party dependencies:
+
+```bash
+sll mock --port 8080
+# Routes ready: /health, /fast, /slow?delay=100, /error?status=500, /rate-limit, /auth, /flaky, /items, /echo
+```
 
 ## Examples
 
@@ -370,6 +430,8 @@ Drop Safe Load Lab directly into any repository's CI pipeline with automatic Ste
 | [FEATURES.md](FEATURES.md) | Complete feature guide with examples |
 | [SETUP.md](SETUP.md) | Detailed setup and troubleshooting guide |
 | [CONFIG_REFERENCE.md](CONFIG_REFERENCE.md) | Complete configuration reference |
+| [docs/benchmarks.md](docs/benchmarks.md) | Benchmark data & performance architecture |
+| [docs/ui-guide.md](docs/ui-guide.md) | Studio Web UI interactive guide |
 | [SECURITY.md](SECURITY.md) | Safety and security guidelines |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Contributing guidelines |
 | [SUPPORT.md](SUPPORT.md) | Getting help |
@@ -379,19 +441,14 @@ Drop Safe Load Lab directly into any repository's CI pipeline with automatic Ste
 ```
 safe-load-lab/
 ├── bin/
-│   └── safe-load-lab.js    # Main CLI
-├── examples/
-│   ├── basic.json          # Basic config
-│   └── advanced.json       # Advanced config
-├── schema/
-│   └── config.schema.json  # JSON schema
-├── tests/
-│   └── smoke.test.mjs      # Tests
-├── ui/
-│   └── server.js           # HTML report viewer
-├── .github/
-│   └── workflows/          # CI/CD workflows
-└── reports/                # Generated reports (gitignored)
+│   └── safe-load-lab.js    # Core CLI & test engine
+├── docs/                   # Guides, benchmarks, and release notes
+├── examples/               # Test configuration presets
+├── schema/                 # JSON schema specifications
+├── tests/                  # 75 unit, integration, performance, & UI tests
+├── ui/                     # Web UI Studio & server
+├── .github/                # GitHub Actions CI & workflows
+└── reports/                # Output artifacts (JSON, HTML, CSV, Markdown)
 ```
 
 ## Related Tools
