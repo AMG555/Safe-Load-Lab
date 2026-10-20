@@ -25,6 +25,8 @@ import {
   renderTemplate,
   resolveDynamicGenerator,
   setHighCapacityMode,
+  compareReports,
+  generateSparkline,
   runTest
 } from '../bin/safe-load-lab.js';
 
@@ -707,6 +709,68 @@ test('QA Scenarios - normalizes multi-step user flows', () => {
   assert.equal(norm.scenarios.length, 1);
   assert.equal(norm.scenarios[0].steps.length, 2);
   assert.equal(norm.scenarios[0].steps[0].extract.token, 'body.token');
+});
+
+// ─── 19. Sparkline and Regression Gate Tests ──────────────────────────
+
+test('QA Sparkline - generates valid Unicode sparklines from duration distributions', () => {
+  const durations = [10, 12, 15, 20, 25, 40, 60, 80, 120, 150];
+  const spark = generateSparkline(durations, 10);
+  assert.equal(spark.length, 10);
+  assert.match(spark, /^[ ▂▃▄▅▆▇█]+$/);
+
+  const emptySpark = generateSparkline([]);
+  assert.equal(emptySpark, '');
+
+  const uniformSpark = generateSparkline([50, 50, 50, 50]);
+  assert.equal(uniformSpark, '▄▄▄▄▄▄▄▄▄▄');
+});
+
+test('QA Regression Gate - compareReports detects latency regressions & passes valid runs', () => {
+  const baseline = {
+    testName: 'api-baseline',
+    totals: { requests: 1000, failed: 0, errorRate: 0, achievedRps: 100 },
+    latencyMs: { avg: 20, p95: 35, p99: 50 }
+  };
+
+  const passingRun = {
+    testName: 'api-optimized',
+    totals: { requests: 1050, failed: 0, errorRate: 0, achievedRps: 105 },
+    latencyMs: { avg: 19, p95: 36, p99: 48 }
+  };
+
+  const regressedRun = {
+    testName: 'api-regressed',
+    totals: { requests: 800, failed: 50, errorRate: 0.0625, achievedRps: 80 },
+    latencyMs: { avg: 60, p95: 90, p99: 150 }
+  };
+
+  const passResult = compareReports(baseline, passingRun, { maxLatencyDiff: 15, maxErrorDiff: 0 });
+  assert.equal(passResult.isRegression, false);
+
+  const failResult = compareReports(baseline, regressedRun, { maxLatencyDiff: 15, maxErrorDiff: 0 });
+  assert.equal(failResult.isRegression, true);
+  assert.match(failResult.regressionReason, /p95 Latency degraded/);
+});
+
+test('QA CLI - diff command runs and exits cleanly on identical reports', () => {
+  const sampleReport = path.join(root, 'reports', 'baseline-temp.json');
+  fs.mkdirSync(path.dirname(sampleReport), { recursive: true });
+  const data = JSON.stringify({
+    summary: {
+      testName: 'temp-test',
+      totals: { requests: 50, failed: 0, errorRate: 0, achievedRps: 10 },
+      latencyMs: { avg: 10, p95: 15, p99: 20 }
+    }
+  });
+  fs.writeFileSync(sampleReport, data);
+  try {
+    const res = runCLI(['diff', sampleReport, sampleReport]);
+    assert.equal(res.status, 0);
+    assert.match(res.stdout, /No regression detected/);
+  } finally {
+    try { fs.unlinkSync(sampleReport); } catch {}
+  }
 });
 
 

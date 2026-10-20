@@ -572,7 +572,7 @@
       <div class="brand" onclick="switchNav('workbench')">
         <div class="brand-icon">⚡</div>
         <div>Safe Load Lab</div>
-        <span class="version-tag">v2.2.0</span>
+        <span class="version-tag">v2.3.0</span>
       </div>
 
       <nav class="nav-tabs">
@@ -743,6 +743,15 @@
                 <label style="margin:0;">Request Body (JSON)</label>
                 <button type="button" class="btn btn-secondary btn-sm" onclick="formatBodyJson()">Format JSON</button>
               </div>
+              <div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin-bottom:6px;background:var(--bg-canvas);padding:4px 8px;border-radius:4px;border:1px solid var(--border-subtle);">
+                <span style="font-size:10px;font-weight:700;color:var(--text-dim);text-transform:uppercase;">Insert:</span>
+                <button type="button" class="btn btn-secondary btn-sm" style="padding:2px 6px;font-size:11px;" onclick="insertDynamicChip('{{$uuid}}')">{{$uuid}}</button>
+                <button type="button" class="btn btn-secondary btn-sm" style="padding:2px 6px;font-size:11px;" onclick="insertDynamicChip('{{$timestamp}}')">{{$timestamp}}</button>
+                <button type="button" class="btn btn-secondary btn-sm" style="padding:2px 6px;font-size:11px;" onclick="insertDynamicChip('{{$isoDate}}')">{{$isoDate}}</button>
+                <button type="button" class="btn btn-secondary btn-sm" style="padding:2px 6px;font-size:11px;" onclick="insertDynamicChip('{{$randomEmail}}')">{{$randomEmail}}</button>
+                <button type="button" class="btn btn-secondary btn-sm" style="padding:2px 6px;font-size:11px;" onclick="insertDynamicChip('{{$randomInt:100:999}}')">{{$randomInt}}</button>
+                <button type="button" class="btn btn-secondary btn-sm" style="padding:2px 6px;font-size:11px;" onclick="insertDynamicChip('{{$randomIp}}')">{{$randomIp}}</button>
+              </div>
               <textarea id="targetBody" rows="4" style="font-family:var(--font-mono);font-size:12px;" placeholder='{"key": "value"}'></textarea>
             </div>
 
@@ -782,6 +791,12 @@
                 </button>
                 <button type="button" class="btn btn-secondary" style="flex:1;" onclick="openCiExportModal()" title="Export GitHub Actions / GitLab CI pipeline">
                   <span>⚙️</span> CI/CD
+                </button>
+                <button type="button" class="btn btn-secondary" style="flex:1;" onclick="openScriptExportModal('k6')" title="Export test as modern k6 JS script">
+                  <span>📤</span> k6
+                </button>
+                <button type="button" class="btn btn-secondary" style="flex:1;" onclick="openScriptExportModal('postman')" title="Export test as Postman Collection">
+                  <span>📬</span> Postman
                 </button>
                 <button type="button" class="btn btn-primary" id="btnExecuteTest" style="flex:2;" onclick="startLoadTest()">
                   <span>🚀</span> Run Test
@@ -829,6 +844,14 @@
               <div class="stat-card">
                 <div class="stat-label">p99 Latency</div>
                 <div class="stat-val" id="statP99Lat">—</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-label">Total Data</div>
+                <div class="stat-val highlight" id="statBandwidth">—</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-label">Throughput</div>
+                <div class="stat-val" id="statThroughput">—</div>
               </div>
             </div>
 
@@ -1215,6 +1238,29 @@
       </div>
     </div>
 
+    <!-- Script Export Modal (k6 & Postman) -->
+    <div id="scriptExportModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:999;align-items:center;justify-content:center;padding:20px;">
+      <div class="card" style="max-width:750px;width:100%;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 40px rgba(0,0,0,0.6);">
+        <div class="card-header" style="justify-content:space-between;">
+          <span class="card-title" id="scriptExportTitle"><span>📤</span> Export Load Test Script</span>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="closeScriptExportModal()">✕</button>
+        </div>
+        <div class="card-body" style="overflow-y:auto;display:flex;flex-direction:column;gap:12px;">
+          <div style="font-size:12px;color:var(--text-muted);" id="scriptExportDesc">
+            Export your Safe Load Lab configuration to execute in other testing environments.
+          </div>
+          <textarea id="scriptExportContent" rows="16" readonly style="font-family:var(--font-mono);font-size:12px;background:var(--bg-canvas);color:#38bdf8;padding:12px;border-radius:6px;border:1px solid var(--border-default);resize:none;"></textarea>
+        </div>
+        <div style="padding:12px 18px;background:var(--bg-subtle);border-top:1px solid var(--border-default);display:flex;justify-content:space-between;align-items:center;">
+          <button type="button" class="btn btn-secondary btn-sm" onclick="closeScriptExportModal()">Close</button>
+          <div style="display:flex;gap:8px;">
+            <button type="button" class="btn btn-secondary btn-sm" onclick="copyScriptExportContent()">Copy Script</button>
+            <button type="button" class="btn btn-primary btn-sm" id="btnDownloadExportScript" onclick="downloadScriptExportContent()">Download File</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
   </main>
 
   <script>
@@ -1227,6 +1273,8 @@
     let testStartTime = 0;
     let allReports = [];
     let customHeaders = [];
+    let currentExportScript = '';
+    let currentExportFormat = 'k6';
 
     // Navigation Switcher
     function switchNav(tabId) {
@@ -1628,6 +1676,20 @@
       document.getElementById('statP95Lat').textContent = `${(summary.latencyMs?.p95 || 0).toFixed(1)}ms`;
       document.getElementById('statP99Lat').textContent = `${(summary.latencyMs?.p99 || 0).toFixed(1)}ms`;
 
+      if (summary.bandwidth) {
+        const mb = (summary.bandwidth.totalBytes / (1024 * 1024)).toFixed(2);
+        const kb = (summary.bandwidth.totalBytes / 1024).toFixed(1);
+        const dataStr = summary.bandwidth.totalBytes >= 1048576 ? `${mb} MB` : `${kb} KB`;
+        const bwEl = document.getElementById('statBandwidth');
+        if (bwEl) bwEl.textContent = dataStr;
+
+        const rate = summary.bandwidth.throughputMbps >= 1 
+          ? `${summary.bandwidth.throughputMbps.toFixed(2)} MB/s`
+          : `${summary.bandwidth.throughputKbps.toFixed(1)} KB/s`;
+        const tpEl = document.getElementById('statThroughput');
+        if (tpEl) tpEl.textContent = rate;
+      }
+
       renderLatencyChart({
         p50: summary.latencyMs?.p50 || 0,
         p90: summary.latencyMs?.p90 || 0,
@@ -1825,6 +1887,83 @@
       navigator.clipboard.writeText(yaml).then(() => {
         alert('CI/CD pipeline workflow YAML copied to clipboard!');
       });
+    }
+
+    function openScriptExportModal(format) {
+      currentExportFormat = format;
+      const config = getActiveConfig(true);
+      if (!config) return;
+      const title = format === 'k6' ? 'Export as k6 Load Test Script' : 'Export as Postman Collection (v2.1)';
+      const desc = format === 'k6' 
+        ? 'Modern JavaScript load test script runnable with "k6 run <script.js>"' 
+        : 'Postman Collection v2.1 importable directly into Postman, Insomnia, or Bruno';
+      
+      document.getElementById('scriptExportTitle').innerHTML = `<span>${format === 'k6' ? '📤' : '📬'}</span> ${title}`;
+      document.getElementById('scriptExportDesc').textContent = desc;
+      document.getElementById('scriptExportContent').value = '// Generating export...';
+      document.getElementById('scriptExportModal').style.display = 'flex';
+      
+      const endpoint = format === 'k6' ? '/api/export/k6' : '/api/export/postman';
+      fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config })
+      })
+      .then(r => r.json())
+      .then(data => {
+        if (data.error) {
+          document.getElementById('scriptExportContent').value = `// Export Error: ${data.error}`;
+          return;
+        }
+        currentExportScript = format === 'k6' ? data.script : JSON.stringify(data.collection, null, 2);
+        document.getElementById('scriptExportContent').value = currentExportScript;
+      })
+      .catch(err => {
+        document.getElementById('scriptExportContent').value = `// Export Error: ${err.message}`;
+      });
+    }
+
+    function closeScriptExportModal() {
+      document.getElementById('scriptExportModal').style.display = 'none';
+    }
+
+    function copyScriptExportContent() {
+      const text = document.getElementById('scriptExportContent').value;
+      navigator.clipboard.writeText(text).then(() => {
+        alert('Script copied to clipboard!');
+      });
+    }
+
+    function downloadScriptExportContent() {
+      const text = document.getElementById('scriptExportContent').value;
+      const filename = currentExportFormat === 'k6' ? 'load-test.k6.js' : 'safe-load-lab.postman_collection.json';
+      const mime = currentExportFormat === 'k6' ? 'application/javascript' : 'application/json';
+      const blob = new Blob([text], { type: mime });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
+
+    function insertDynamicChip(chip) {
+      const bodyGroup = document.getElementById('bodyGroup');
+      const bodyInput = document.getElementById('targetBody');
+      const urlInput = document.getElementById('targetUrl');
+      
+      if (bodyGroup && bodyGroup.style.display !== 'none' && document.activeElement === bodyInput) {
+        const start = bodyInput.selectionStart || 0;
+        const end = bodyInput.selectionEnd || 0;
+        bodyInput.value = bodyInput.value.slice(0, start) + chip + bodyInput.value.slice(end);
+        bodyInput.focus();
+        bodyInput.selectionStart = bodyInput.selectionEnd = start + chip.length;
+      } else {
+        const start = urlInput.selectionStart || 0;
+        const end = urlInput.selectionEnd || 0;
+        urlInput.value = urlInput.value.slice(0, start) + chip + urlInput.value.slice(end);
+        urlInput.focus();
+        urlInput.selectionStart = urlInput.selectionEnd = start + chip.length;
+      }
     }
 
     function renderLatencyChart(data) {

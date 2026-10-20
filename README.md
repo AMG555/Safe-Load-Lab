@@ -387,11 +387,32 @@ sll stress \
   --html reports/stress-test.html
 ```
 
-### Compare Reports
+### Compare Reports & SLA Regression Gate
+
+Compare two test runs or gate PRs in CI against performance regressions:
 
 ```bash
-# Compare two test runs
-sll compare reports/baseline.json reports/after-optimization.json
+# Basic comparison
+sll compare reports/baseline.json reports/current.json
+
+# Enforce strict SLA regression gate in CI (fails with exit code 1 if violated)
+sll diff reports/baseline.json reports/current.json --max-latency-diff 10 --max-error-diff 0
+# Or alias
+sll check-regression reports/baseline.json reports/current.json
+```
+
+Outputs formatted regression delta tables to console and appends directly to `$GITHUB_STEP_SUMMARY` in GitHub Actions.
+
+### Unicode Latency Sparkline Distributions
+
+Real-time latency histogram sparklines in terminal summaries and Markdown reports:
+
+```
+Avg latency:  19.20ms
+p95 latency:  36.00ms
+p99 latency:  48.00ms
+Distribution:  ▂▃▄▅▆▇█ [10ms ... 65ms]
+Throughput:   1.42 MB/s (12.4 MB in, 1.8 MB out)
 ```
 
 ### Webhook Integration
@@ -582,7 +603,7 @@ safe-load-lab/
 ├── docs/                   # Guides, benchmarks, and release notes
 ├── examples/               # Test configuration presets
 ├── schema/                 # JSON schema specifications
-├── tests/                  # 105 unit, integration, performance, & UI tests
+├── tests/                  # 108 unit, integration, performance, & UI tests
 ├── ui/                     # Web UI Studio & server
 ├── .github/                # GitHub Actions CI & workflows
 └── reports/                # Output artifacts (JSON, HTML, CSV, Markdown)

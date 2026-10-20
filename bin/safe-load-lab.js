@@ -1170,6 +1170,22 @@ function calculatePercentiles(values, percentiles) {
   }, {});
 }
 
+function generateSparkline(values, buckets = 10) {
+  if (!values || !values.length) return '';
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  if (min === max) return '▄'.repeat(buckets);
+  const step = (max - min) / buckets;
+  const counts = new Array(buckets).fill(0);
+  for (const v of values) {
+    const b = Math.min(buckets - 1, Math.floor((v - min) / (step || 1)));
+    counts[b]++;
+  }
+  const maxCount = Math.max(...counts) || 1;
+  const chars = [' ', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+  return counts.map(c => chars[Math.min(chars.length - 1, Math.floor((c / maxCount) * (chars.length - 1)))]).join('');
+}
+
 function evaluateThresholds(thresholds, metrics) {
   const checks = {};
   if (thresholds.maxErrorRate !== undefined) checks.maxErrorRate = { pass: metrics.errorRate <= Number(thresholds.maxErrorRate), actual: metrics.errorRate, expected: `<= ${thresholds.maxErrorRate}` };
@@ -1277,6 +1293,7 @@ function summarize(results, startedAt, finishedAt, config) {
     requested: { durationSeconds: config.durationSeconds, concurrency: config.concurrency, rps: config.rps, stages: config.stages },
     totals: { requests: total, failed, errorRate: metrics.errorRate, achievedRps: elapsedSeconds > 0 ? total / elapsedSeconds : 0 },
     bandwidth: { totalBytes, bytesSent: totalBytesSent, bytesReceived: totalBytesReceived, throughputKbps, throughputMbps },
+    latencySparkline: generateSparkline(durations, 10),
     latencyMs: { avg, min: durations.length ? Math.min(...durations) : 0, max: durations.length ? Math.max(...durations) : 0, p50: globalPercentiles[50], p90: globalPercentiles[90], p95: metrics.p95, p99: metrics.p99 },
     byStatus,
     byEndpoint: endpointSummary,
@@ -2022,6 +2039,7 @@ function generateMarkdownReport(summary) {
 | p99 | ${summary.latencyMs.p99.toFixed(2)}ms |
 | Min | ${summary.latencyMs.min.toFixed(2)}ms |
 | Max | ${summary.latencyMs.max.toFixed(2)}ms |
+| Distribution | \`${summary.latencySparkline || 'N/A'}\` |
 
 ## Status Distribution
 
@@ -2214,6 +2232,11 @@ function printSummary(summary) {
   console.log(`Avg latency:  ${chalk.magenta(summary.latencyMs.avg.toFixed(2) + 'ms')}`);
   console.log(`p95 latency:  ${chalk.magenta(summary.latencyMs.p95.toFixed(2) + 'ms')}`);
   console.log(`p99 latency:  ${chalk.magenta(summary.latencyMs.p99.toFixed(2) + 'ms')}`);
+  if (summary.latencySparkline) {
+    const minMs = (summary.latencyMs.min || 0).toFixed(0);
+    const maxMs = (summary.latencyMs.max || 0).toFixed(0);
+    console.log(`Distribution: ${chalk.cyan.bold(summary.latencySparkline)} ${chalk.gray('[' + minMs + 'ms ... ' + maxMs + 'ms]')}`);
+  }
   if (summary.bandwidth) {
     const mbRecv = (summary.bandwidth.bytesReceived / (1024 * 1024)).toFixed(2);
     const mbSent = (summary.bandwidth.bytesSent / (1024 * 1024)).toFixed(2);
@@ -2281,34 +2304,79 @@ function createSample(out = 'load-test.json') {
   console.log(`Created sample config: ${out}`);
 }
 
-// New Feature: Compare two test reports
-function compareReports(file1Path, file2Path) {
-  const report1 = JSON.parse(fs.readFileSync(file1Path, 'utf8'));
-  const report2 = JSON.parse(fs.readFileSync(file2Path, 'utf8'));
-  const s1 = report1.summary;
-  const s2 = report2.summary;
-  
-  console.log('\n🔍 Report Comparison\n');
-  console.log(`Report 1: ${s1.testName} (${s1.startedAt})`);
-  console.log(`Report 2: ${s2.testName} (${s2.startedAt})\n`);
-  
+// Compare two test reports with regression analysis & CI gate
+function compareReports(file1Path, file2Path, options = {}) {
+  const report1 = typeof file1Path === 'object' ? file1Path : JSON.parse(fs.readFileSync(file1Path, 'utf8'));
+  const report2 = typeof file2Path === 'object' ? file2Path : JSON.parse(fs.readFileSync(file2Path, 'utf8'));
+  const s1 = report1.summary || report1;
+  const s2 = report2.summary || report2;
+
+  const maxLatencyDiff = Number(options['max-latency-diff'] || options.maxLatencyDiff || 15);
+  const maxErrorDiff = Number(options['max-error-diff'] || options.maxErrorDiff || 0);
+
+  console.log(chalk.bold('\n🔍 Safe Load Lab — Report Comparison & Regression Gate'));
+  console.log(chalk.gray('─'.repeat(60)));
+  console.log(`Baseline (A): ${chalk.cyan(s1.testName || 'Test A')} (${s1.startedAt || 'N/A'})`);
+  console.log(`Current  (B): ${chalk.cyan(s2.testName || 'Test B')} (${s2.startedAt || 'N/A'})\n`);
+
+  const rows = [];
   const compare = (label, val1, val2, unit = '', lower = true) => {
-    const diff = val2 - val1;
-    const pct = val1 ? ((diff / val1) * 100).toFixed(2) : 'N/A';
-    const better = lower ? (diff < 0) : (diff > 0);
-    const icon = diff === 0 ? '=' : better ? '✅' : '⚠️ ';
+    const v1 = Number(val1 || 0);
+    const v2 = Number(val2 || 0);
+    const diff = v2 - v1;
+    const pct = v1 ? Number(((diff / v1) * 100).toFixed(2)) : (v2 ? 100 : 0);
+    const better = lower ? (diff <= 0) : (diff >= 0);
+    const icon = diff === 0 ? '=' : better ? chalk.green('✅') : chalk.yellow('⚠️ ');
     const sign = diff > 0 ? '+' : '';
-    console.log(`${icon} ${label.padEnd(20)} ${val1.toFixed(2)}${unit} → ${val2.toFixed(2)}${unit} (${sign}${pct}%)`);
+    console.log(`${icon} ${label.padEnd(16)} ${chalk.white(v1.toFixed(2) + unit)} → ${chalk.white(v2.toFixed(2) + unit)} (${sign}${pct}%)`);
+    rows.push({ label, val1: `${v1.toFixed(2)}${unit}`, val2: `${v2.toFixed(2)}${unit}`, diff: `${sign}${pct}%`, better });
   };
-  
-  compare('Requests', s1.totals.requests, s2.totals.requests, '', false);
-  compare('Failed', s1.totals.failed, s2.totals.failed, '', true);
-  compare('Error Rate', s1.totals.errorRate * 100, s2.totals.errorRate * 100, '%', true);
-  compare('Achieved RPS', s1.totals.achievedRps, s2.totals.achievedRps, '', false);
-  compare('Avg Latency', s1.latencyMs.avg, s2.latencyMs.avg, 'ms', true);
-  compare('p95 Latency', s1.latencyMs.p95, s2.latencyMs.p95, 'ms', true);
-  compare('p99 Latency', s1.latencyMs.p99, s2.latencyMs.p99, 'ms', true);
-  console.log();
+
+  compare('Requests', s1.totals?.requests, s2.totals?.requests, '', false);
+  compare('Failed', s1.totals?.failed, s2.totals?.failed, '', true);
+  compare('Error Rate', (s1.totals?.errorRate || 0) * 100, (s2.totals?.errorRate || 0) * 100, '%', true);
+  compare('Achieved RPS', s1.totals?.achievedRps, s2.totals?.achievedRps, '', false);
+  compare('Avg Latency', s1.latencyMs?.avg, s2.latencyMs?.avg, 'ms', true);
+  compare('p95 Latency', s1.latencyMs?.p95, s2.latencyMs?.p95, 'ms', true);
+  compare('p99 Latency', s1.latencyMs?.p99, s2.latencyMs?.p99, 'ms', true);
+
+  const p95DiffPct = s1.latencyMs?.p95 ? Number((((s2.latencyMs.p95 - s1.latencyMs.p95) / s1.latencyMs.p95) * 100).toFixed(2)) : 0;
+  const errorRateDiff = Number((((s2.totals?.errorRate || 0) - (s1.totals?.errorRate || 0)) * 100).toFixed(2));
+
+  let isRegression = false;
+  let regressionReason = '';
+  if (p95DiffPct > maxLatencyDiff) {
+    isRegression = true;
+    regressionReason = `p95 Latency degraded by ${p95DiffPct}% (allowed threshold: ${maxLatencyDiff}%)`;
+  } else if (errorRateDiff > maxErrorDiff) {
+    isRegression = true;
+    regressionReason = `Error rate increased by ${errorRateDiff}% (allowed threshold: ${maxErrorDiff}%)`;
+  }
+
+  console.log(chalk.gray('─'.repeat(60)));
+  if (isRegression) {
+    console.log(chalk.bold.red(`❌ PERFORMANCE REGRESSION DETECTED: ${regressionReason}\n`));
+  } else {
+    console.log(chalk.bold.green(`✅ Comparison Passed: No regression detected (within tolerance).\n`));
+  }
+
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    try {
+      const summaryMd = [
+        '### 🔍 Safe Load Lab Performance Regression Gate',
+        `**Status**: ${isRegression ? '❌ **Failed** - Regression Detected' : '✅ **Passed** - Within Tolerances'}`,
+        isRegression ? `> **Violation**: ${regressionReason}` : '',
+        '',
+        '| Metric | Baseline (A) | Current (B) | Delta | Status |',
+        '|--------|--------------|-------------|-------|--------|',
+        ...rows.map(r => `| ${r.label} | ${r.val1} | ${r.val2} | ${r.diff} | ${r.better ? '✅' : '⚠️'} |`),
+        ''
+      ].filter(Boolean).join('\n');
+      fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, '\n' + summaryMd + '\n');
+    } catch (_) {}
+  }
+
+  return { isRegression, regressionReason, p95DiffPct, errorRateDiff };
 }
 
 // New Feature: Send webhook notification
@@ -2764,9 +2832,12 @@ async function main() {
   if (command === 'sample') { createSample(args.out || 'load-test.json'); return; }
   if (command === 'validate') { validateConfigCommand(args); return; }
   if (command === 'plan') { printPlan(normalizeConfig(args)); return; }
-  if (command === 'compare') {
-    if (!args._[1] || !args._[2]) throw new Error('compare requires two report files: compare <file1> <file2>');
-    compareReports(args._[1], args._[2]);
+  if (command === 'compare' || command === 'diff' || command === 'check-regression') {
+    const file1 = args._[1] || args.baseline;
+    const file2 = args._[2] || args.current;
+    if (!file1 || !file2) throw new Error(`${command} requires two report files: sll ${command} <baseline.json> <current.json>`);
+    const diffResult = compareReports(file1, file2, args);
+    if (diffResult.isRegression) process.exitCode = 1;
     return;
   }
   if (command === 'mock') {
@@ -3054,6 +3125,8 @@ export {
   exportToK6,
   exportToPostman,
   resolveDynamicGenerator,
-  setHighCapacityMode
+  setHighCapacityMode,
+  compareReports,
+  generateSparkline
 };
 
