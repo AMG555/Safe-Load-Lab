@@ -1,0 +1,57 @@
+{
+  "$schema": "../schema/config.schema.json",
+  "name": "ecommerce-customer-journey",
+  "durationSeconds": 30,
+  "concurrency": 5,
+  "rps": 10,
+  "thresholds": {
+    "maxErrorRate": 0.01,
+    "p95Ms": 350
+  },
+  "scenarios": [
+    {
+      "name": "login-and-browse-flow",
+      "weight": 2,
+      "steps": [
+        {
+          "name": "auth-login",
+          "method": "POST",
+          "url": "http://127.0.0.1:8080/auth",
+          "headers": {
+            "Content-Type": "application/json",
+            "X-Request-ID": "{{$uuid}}"
+          },
+          "body": {
+            "email": "{{$randomEmail}}",
+            "session": "{{$uuid}}"
+          },
+          "extract": {
+            "authToken": "body.token"
+          }
+        },
+        {
+          "name": "fetch-items",
+          "method": "GET",
+          "url": "http://127.0.0.1:8080/items",
+          "headers": {
+            "Authorization": "Bearer {{authToken}}",
+            "Accept": "application/json"
+          }
+        },
+        {
+          "name": "create-cart-item",
+          "method": "POST",
+          "url": "http://127.0.0.1:8080/items",
+          "headers": {
+            "Authorization": "Bearer {{authToken}}",
+            "Content-Type": "application/json"
+          },
+          "body": {
+            "sku": "ITEM-{{$randomInt:100:999}}",
+            "created": "{{$isoDate}}"
+          }
+        }
+      ]
+    }
+  ]
+}

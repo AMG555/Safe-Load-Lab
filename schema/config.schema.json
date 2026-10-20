@@ -3,7 +3,10 @@
   "$id": "https://safe-load-lab.local/config.schema.json",
   "title": "Safe Load Lab Config",
   "type": "object",
-  "required": ["endpoints"],
+  "anyOf": [
+    { "required": ["endpoints"] },
+    { "required": ["scenarios"] }
+  ],
   "additionalProperties": true,
   "properties": {
     "name": { "type": "string" },
@@ -11,9 +14,9 @@
     "baseUrl": { "type": "string" },
     "variables": { "type": "object" },
     "environments": { "type": "object" },
-    "durationSeconds": { "type": "number", "minimum": 1, "maximum": 600 },
-    "concurrency": { "type": "number", "minimum": 1, "maximum": 100 },
-    "rps": { "type": "number", "minimum": 1, "maximum": 200 },
+    "durationSeconds": { "type": "number", "minimum": 1, "maximum": 86400 },
+    "concurrency": { "type": "number", "minimum": 1, "maximum": 2000 },
+    "rps": { "type": "number", "minimum": 1, "maximum": 10000 },
     "timeoutMs": { "type": "number", "minimum": 100, "maximum": 120000 },
     "stages": {
       "type": "array",
@@ -22,9 +25,9 @@
         "required": ["durationSeconds", "concurrency", "rps"],
         "properties": {
           "name": { "type": "string" },
-          "durationSeconds": { "type": "number", "minimum": 1, "maximum": 600 },
-          "concurrency": { "type": "number", "minimum": 1, "maximum": 100 },
-          "rps": { "type": "number", "minimum": 1, "maximum": 200 }
+          "durationSeconds": { "type": "number", "minimum": 1, "maximum": 86400 },
+          "concurrency": { "type": "number", "minimum": 1, "maximum": 2000 },
+          "rps": { "type": "number", "minimum": 1, "maximum": 10000 }
         }
       }
     },
@@ -37,7 +40,23 @@
       }
     },
     "setup": { "type": "array", "items": { "$ref": "#/$defs/endpoint" } },
-    "endpoints": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/endpoint" } }
+    "endpoints": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/endpoint" } },
+    "scenarios": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "steps"],
+        "properties": {
+          "name": { "type": "string" },
+          "weight": { "type": "number", "minimum": 0 },
+          "steps": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/endpoint" }
+          }
+        }
+      }
+    }
   },
   "$defs": {
     "endpoint": {
