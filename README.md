@@ -2,23 +2,25 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js 18+](https://img.shields.io/badge/node-%3E%3D18-green.svg)](https://nodejs.org/)
-[![Version](https://img.shields.io/badge/version-2.3.0-blue.svg)](https://github.com/AMG555/Safe-Load-Lab/releases)
+[![Version](https://img.shields.io/badge/version-2.4.0-blue.svg)](https://github.com/AMG555/Safe-Load-Lab/releases)
 [![CI](https://github.com/AMG555/Safe-Load-Lab/actions/workflows/safe-load-lab.yml/badge.svg)](https://github.com/AMG555/Safe-Load-Lab/actions/workflows/safe-load-lab.yml)
-[![Tests: 120 Passing](https://img.shields.io/badge/tests-120%20passing-brightgreen.svg)](https://github.com/AMG555/Safe-Load-Lab)
+[![Tests: 124 Passing](https://img.shields.io/badge/tests-124%20passing-brightgreen.svg)](https://github.com/AMG555/Safe-Load-Lab)
 
 A production-ready, feature-rich CLI for **controlled load testing**, **autonomous capacity discovery**, **A/B differential benchmarking**, and **performance regression detection** of applications you own or have explicit permission to test.
 
 This is **not** a DDoS tool. It is designed for safe capacity, performance, rate-limit, auth-flow, GraphQL, and resilience testing with built-in safety limits and ethical use guidelines.
 
-## 🚀 What's New in v2.3.0
+## 🚀 What's New in v2.4.0
 
+- 🏥 **Automated SRE Root-Cause Bottleneck Diagnosis Engine (`sll diagnose` / `sll blame`)**: Automated root-cause blame for endpoint latency mass drag, temporal cold-start vs cascading resource leaks, tail amplification divergence ($p_{95}/p_{50} \ge 4.0$), and proxy timeout errors with a 0–100 health score.
+- 🔄 **OpenAPI Intelligent CRUD Journey Flow Generator (`sll autogen-flow` / `sll generate-journey`)**: Synthesizes production-ready multi-step scenario journey configs with dynamic variable extraction (`{{id}}`) and assertion chains directly from OpenAPI/Swagger specs.
 - ⚡ **Autonomous Capacity Discovery (`sll capacity` / `sll break`)**: Automated stepped-ladder ramp algorithm finds breaking points, saturation knee, sweet spot RPS, and computes recommended 80% safe headroom for autoscaling sizing.
 - 🌊 **Traffic Shaping Waveforms**: Shape realistic traffic profiles using `sine` (sinusoidal diurnal wave), `ladder` (stepped with cooldown), `burst` (periodic spikes on baseline), or `constant`.
 - 📊 **HDR Latency Histograms & Statistical Anomaly Detection**: 8 logarithmic latency buckets with automated detection of tail divergence ($p_{95}/p_{50} \ge 3.5$) and bimodal distributions.
 - 💥 **Chaos Engineering & Dynamic Mock Routes**: Hermetic mock server extended with `/chaos` (configurable failure rate & delay jitter), `/slow-stream` (chunked streaming), and runtime `/mock/routes` CRUD API.
 - 📑 **Zero-Dependency Executive HTML Reports**: Self-contained dark-mode report with embedded pure-SVG percentile progression curves and HDR histogram charts.
 - 🎨 **Visual Multi-Step Scenario Journey Flow Builder**: Interactive visual step sequence editor in Studio UI with response variable extraction and assertion chaining.
-- 🛡️ **120 Automated Quality Tests**: 100% passing test coverage across Unit, Integration, Performance, Smoke, A/B, UI Server, and QA suites.
+- 🛡️ **124 Automated Quality Tests**: 100% passing test coverage across Unit, Integration, Performance, Smoke, A/B, UI Server, and QA suites.
 
 ## 🎯 Why Safe Load Lab?
 
@@ -133,6 +135,8 @@ sll plan --config examples/advanced.json --env local
 
 | Command | Description |
 |---------|-------------|
+| `diagnose`, `blame` | Automated SRE root-cause bottleneck diagnosis & 0–100 health scoring for test reports |
+| `autogen-flow`, `generate-journey` | Synthesize complete CRUD lifecycle journey scenarios from OpenAPI/Swagger spec |
 | `capacity`, `break` | Autonomous breaking point discovery with 80% safe headroom production sizing |
 | `bench`, `quick` | Run instant zero-config micro-benchmark on single endpoint |
 | `run` | Run a controlled load test |
@@ -154,6 +158,41 @@ sll plan --config examples/advanced.json --env local
 | `compare` | Compare two test reports side-by-side |
 | `version` | Show version |
 | `help` | Show help |
+
+## 🏥 Automated SRE Bottleneck Diagnosis Engine
+
+Stop guessing why your service slowed down. Safe Load Lab automatically analyzes test execution reports to pinpoint exact root causes, computes a **0–100 System Health Score**, and provides concrete SRE recommendations:
+
+```bash
+# Analyze any test report and output SRE findings
+sll diagnose reports/my-report.json
+# or use alias
+sll blame reports/my-report.json
+```
+
+**Diagnosed Root Causes**:
+- **Endpoint Latency Drag (`ENDPOINT_BOTTLENECK`)**: Flags routes that consume $\ge 50\%$ of accumulated system latency mass.
+- **Cold-Start Warmup Surges (`COLD_START_LAG`)**: Detects high-latency clusters in the opening third of test runs (JIT compilation, connection pool starvation).
+- **Cascading Resource Leaks (`CASCADING_LEAK`)**: Detects monotonically increasing failure rates or tail latency degradation towards the end of test runs (unclosed connections, memory leaks, file descriptor exhaustion).
+- **Extreme Tail Latency Divergence (`TAIL_AMPLIFICATION`)**: Identifies $p_{95}/p_{50} \ge 4.0\times$ divergence caused by lock contention or GC pauses.
+- **Reverse Proxy Saturation (`GATEWAY_TIMEOUT`)**: Pinpoints upstream 502/504 timeouts when backend queue depths overflow.
+- **Strict Rate Limiting (`RATE_LIMIT_EXCEEDED`)**: Identifies HTTP 429 throttling triggers.
+
+## 🔄 OpenAPI Intelligent CRUD Journey Flow Generator
+
+Convert static OpenAPI/Swagger endpoint definitions into production-grade, realistic user journeys in one command:
+
+```bash
+# Synthesize complete multi-step CRUD lifecycle scenario
+sll autogen-flow swagger.json --out scenario-journey.json
+```
+
+**What it synthesizes**:
+1. **POST (Create)**: Generates create requests with dynamic random payloads and automatically extracts created resource IDs (`extract: { orderId: 'body.id' }`).
+2. **GET (Read)**: Reads created resources using extracted dynamic variables (`url: '/orders/{{orderId}}'`).
+3. **PUT / PATCH (Update)**: Sends update mutations referencing the active resource.
+4. **DELETE (Cleanup)**: Deletes the created entity to leave your test database clean.
+5. **Response Assertions**: Auto-wires HTTP 200, 201, 204 status validations for every step.
 
 ## ⚡ Autonomous Capacity Discovery & Breaking Point Engine
 

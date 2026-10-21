@@ -1,6 +1,6 @@
 {
   "name": "safe-load-lab",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "description": "Advanced controlled load-testing CLI with A/B differential testing, hermetic mock server, cURL import, spike, soak, stress tests, webhooks, real-time monitoring, response assertions, and retry logic for applications you own or have permission to test",
   "type": "module",
   "bin": {

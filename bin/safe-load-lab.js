@@ -9,7 +9,7 @@ import { performance } from 'node:perf_hooks';
 import chalk from 'chalk';
 import cliProgress from 'cli-progress';
 
-const VERSION = '2.3.0';
+const VERSION = '2.4.0';
 
 const BASE_LIMITS = {
   maxDurationSeconds: 600,
@@ -203,6 +203,8 @@ Commands:
   bench, quick    Run quick zero-config benchmark on single endpoint
   run             Run a controlled load test
   capacity, break Autonomous capacity discovery: step load until latency knee or breaking point
+  diagnose, blame Automated SRE root-cause failure & bottleneck diagnosis from test report
+  autogen-flow    Synthesize executable CRUD user journey scenario from OpenAPI spec
   probe, ping     Send single preflight probe to verify target status, latency, & assertions
   ci              Generate CI/CD pipeline workflow (GitHub Actions or GitLab CI)
   ui, studio      Start Safe Load Lab Web UI Studio locally
@@ -535,6 +537,235 @@ function computeLatencyDistribution(durations) {
   anomalies.tailRatio = tailRatio;
 
   return { buckets, anomalies };
+}
+
+function computeBottleneckDiagnosis(summary, results = []) {
+  const diagnosis = {
+    findings: [],
+    healthScore: 100,
+    dominantIssue: 'HEALTHY',
+    summaryText: 'System operated within normal performance tolerances.'
+  };
+
+  if (!summary) return diagnosis;
+
+  const totalReqs = summary.totals?.requests || 0;
+  const failedReqs = summary.totals?.failed || 0;
+  const errorRate = summary.totals?.errorRate || 0;
+  const p95 = summary.latencyMs?.p95 || 0;
+  const p50 = summary.latencyMs?.p50 || 0;
+  const avg = summary.latencyMs?.avg || 0;
+
+  // 1. Endpoint Latency Drag / Blame
+  const endpoints = summary.byEndpoint || summary.endpointSummary || {};
+  if (endpoints && Object.keys(endpoints).length > 1) {
+    let totalLatencyMass = 0;
+    const masses = [];
+    for (const [name, stats] of Object.entries(endpoints)) {
+      const count = stats.total || stats.requests || 0;
+      const avgMs = stats.avgMs || stats.avg || 0;
+      const mass = count * avgMs;
+      totalLatencyMass += mass;
+      masses.push({ name, mass, avgMs, total: count, p95Ms: stats.p95Ms || stats.p95 || avgMs });
+    }
+
+    if (totalLatencyMass > 0) {
+      for (const m of masses) {
+        const pct = Math.round((m.mass / totalLatencyMass) * 100);
+        if (pct >= 50 && masses.length > 1) {
+          diagnosis.healthScore -= 15;
+          diagnosis.findings.push({
+            category: 'ENDPOINT_BOTTLENECK',
+            severity: 'critical',
+            title: `Endpoint '${m.name}' Dragging System Latency`,
+            detail: `'${m.name}' accounted for ${pct}% of total accumulated request duration (avg: ${m.avgMs.toFixed(1)}ms).`,
+            recommendation: `Optimize database queries or add caching to '${m.name}' before scaling other routes.`
+          });
+        }
+      }
+    }
+  }
+
+  // 2. Failure & Latency Temporal Pattern (Cold start vs Cascading Resource Exhaustion)
+  if (Array.isArray(results) && results.length >= 10) {
+    const totalCount = results.length;
+    const bucketSize = Math.floor(totalCount / 3);
+    const earlyChunk = results.slice(0, bucketSize);
+    const midChunk = results.slice(bucketSize, bucketSize * 2);
+    const lateChunk = results.slice(bucketSize * 2);
+
+    // Failure distribution checks
+    if (failedReqs > 0) {
+      const earlyFails = earlyChunk.filter(r => r.error || r.status >= 400 || r.status === 0).length;
+      const midFails = midChunk.filter(r => r.error || r.status >= 400 || r.status === 0).length;
+      const lateFails = lateChunk.filter(r => r.error || r.status >= 400 || r.status === 0).length;
+
+      if (earlyFails / failedReqs >= 0.70 && failedReqs >= 3) {
+        diagnosis.healthScore -= 20;
+        diagnosis.findings.push({
+          category: 'COLD_START_LAG',
+          severity: 'warning',
+          title: 'Initial Warmup / Cold-Start Failure Surge',
+          detail: `${Math.round((earlyFails / failedReqs) * 100)}% of failures occurred during the opening third of the test.`,
+          recommendation: 'Pre-warm connection pools, enable JIT compilation warm-up, or configure serverless min-instances.'
+        });
+      } else if (lateFails > midFails && midFails > earlyFails && lateFails / failedReqs >= 0.50) {
+        diagnosis.healthScore -= 30;
+        diagnosis.findings.push({
+          category: 'CASCADING_LEAK',
+          severity: 'critical',
+          title: 'Cascading Resource Exhaustion Detected',
+          detail: 'Failures escalated monotonically as test progressed (late phase failure concentration).',
+          recommendation: 'Check for unclosed database connections, uncollected memory buffers, or OS file descriptor limits (ulimit -n).'
+        });
+      }
+    }
+
+    // Latency temporal pattern checks
+    const earlyAvg = earlyChunk.reduce((s, r) => s + (r.durationMs ?? r.duration ?? 0), 0) / (earlyChunk.length || 1);
+    const midAvg = midChunk.reduce((s, r) => s + (r.durationMs ?? r.duration ?? 0), 0) / (midChunk.length || 1);
+    const lateAvg = lateChunk.reduce((s, r) => s + (r.durationMs ?? r.duration ?? 0), 0) / (lateChunk.length || 1);
+
+    if (earlyAvg > 3 * midAvg && earlyAvg >= 50 && !diagnosis.findings.some(f => f.category === 'COLD_START_LAG')) {
+      diagnosis.healthScore -= 15;
+      diagnosis.findings.push({
+        category: 'COLD_START_LAG',
+        severity: 'warning',
+        title: 'Initial Cold-Start Latency Lag',
+        detail: `First third latency (avg: ${earlyAvg.toFixed(1)}ms) was ${(earlyAvg / (midAvg || 1)).toFixed(1)}x slower than steady-state (avg: ${midAvg.toFixed(1)}ms).`,
+        recommendation: 'Pre-warm connection pools, enable JIT compilation warm-up, or configure provisioned concurrency.'
+      });
+    } else if (lateAvg > 3 * midAvg && lateAvg >= 50 && !diagnosis.findings.some(f => f.category === 'CASCADING_LEAK')) {
+      diagnosis.healthScore -= 25;
+      diagnosis.findings.push({
+        category: 'CASCADING_LEAK',
+        severity: 'critical',
+        title: 'Cascading Late-Stage Latency Degradation',
+        detail: `Final third latency (avg: ${lateAvg.toFixed(1)}ms) degraded to ${(lateAvg / (midAvg || 1)).toFixed(1)}x steady-state (avg: ${midAvg.toFixed(1)}ms).`,
+        recommendation: 'Investigate memory leak, thread contention, or database connection pool exhaustion.'
+      });
+    }
+  }
+
+  // 3. Tail Amplification
+  if (p50 > 0 && p95 / p50 >= 4.0) {
+    diagnosis.healthScore -= 15;
+    diagnosis.findings.push({
+      category: 'TAIL_AMPLIFICATION',
+      severity: 'warning',
+      title: 'Extreme Tail Latency Divergence',
+      detail: `p95 (${p95.toFixed(1)}ms) is ${(p95 / p50).toFixed(1)}x higher than median p50 (${p50.toFixed(1)}ms).`,
+      recommendation: 'Investigate lock contention, Garbage Collection pauses, or disk I/O fsync spikes.'
+    });
+  }
+
+  // 4. HTTP Status Code Root Cause
+  const statusCodes = summary.byStatus || summary.statusCodes || {};
+  const status504 = (statusCodes['504'] || 0) + (statusCodes['502'] || 0);
+  const status429 = statusCodes['429'] || 0;
+  const status500 = statusCodes['500'] || 0;
+  const status503 = statusCodes['503'] || 0;
+
+  if (status504 > 0 && status504 / (failedReqs || 1) >= 0.4) {
+    diagnosis.healthScore -= 25;
+    diagnosis.findings.push({
+      category: 'GATEWAY_TIMEOUT',
+      severity: 'critical',
+      title: 'Upstream Gateway / Reverse Proxy Timeout (502/504)',
+      detail: `${status504} requests dropped by proxy/gateway. Backend queue depth saturated.`,
+      recommendation: 'Increase backend worker thread pool capacity or adjust Nginx/ALB idle timeout limits.'
+    });
+  }
+
+  if (status429 > 0) {
+    diagnosis.healthScore -= 10;
+    diagnosis.findings.push({
+      category: 'RATE_LIMIT_EXCEEDED',
+      severity: 'warning',
+      title: 'Target Rate Limiting Active (HTTP 429)',
+      detail: `${status429} request(s) received HTTP 429 Too Many Requests.`,
+      recommendation: 'Tune application rate limiting thresholds or add exponential backoff jitter in client retry policy.'
+    });
+  }
+
+  if (status500 > 0 && status500 / (failedReqs || 1) >= 0.5) {
+    diagnosis.healthScore -= 25;
+    diagnosis.findings.push({
+      category: 'APPLICATION_EXCEPTION',
+      severity: 'critical',
+      title: 'Uncaught Application Crashes (HTTP 500)',
+      detail: `${status500} unhandled internal server error(s) logged.`,
+      recommendation: 'Inspect target application server logs at failure timestamp for stack traces.'
+    });
+  }
+
+  if (status503 > 0 && status503 / (failedReqs || 1) >= 0.4) {
+    diagnosis.healthScore -= 25;
+    diagnosis.findings.push({
+      category: 'SERVICE_UNAVAILABLE',
+      severity: 'critical',
+      title: 'Service Unavailable / Pod Eviction (HTTP 503)',
+      detail: `${status503} requests rejected with 503 Service Unavailable.`,
+      recommendation: 'Check Kubernetes pod restart counts (OOMKilled) or autoscale replica ceilings.'
+    });
+  }
+
+  // 5. Global Error Rate Evaluation
+  if (errorRate >= 0.20) {
+    diagnosis.healthScore -= 30;
+    diagnosis.findings.push({
+      category: 'HIGH_ERROR_RATE',
+      severity: 'critical',
+      title: `Excessive Error Rate (${(errorRate * 100).toFixed(1)}%)`,
+      detail: `${failedReqs} of ${totalReqs || failedReqs} requests failed. SLA breach.`,
+      recommendation: 'Check target service logs and isolate failing endpoints.'
+    });
+  } else if (errorRate >= 0.05) {
+    diagnosis.healthScore -= 15;
+    diagnosis.findings.push({
+      category: 'ELEVATED_ERRORS',
+      severity: 'warning',
+      title: `Elevated Error Rate (${(errorRate * 100).toFixed(1)}%)`,
+      detail: `${failedReqs} failed requests recorded. Exceeds standard tolerance.`,
+      recommendation: 'Review error samples in report to isolate failure root cause.'
+    });
+  }
+
+  diagnosis.healthScore = Math.max(0, Math.min(100, diagnosis.healthScore));
+
+  if (diagnosis.findings.length === 0) {
+    if (errorRate > 0.05) {
+      diagnosis.dominantIssue = 'ELEVATED_ERRORS';
+      diagnosis.summaryText = `Test completed with ${(errorRate * 100).toFixed(1)}% error rate.`;
+    } else {
+      diagnosis.dominantIssue = 'HEALTHY';
+      diagnosis.summaryText = 'Target passed load test with zero bottleneck patterns detected.';
+    }
+  } else {
+    diagnosis.dominantIssue = diagnosis.findings[0].category;
+    diagnosis.summaryText = diagnosis.findings[0].title;
+  }
+
+  return diagnosis;
+}
+
+function printBottleneckDiagnosis(diagnosis) {
+  const score = diagnosis?.healthScore ?? 100;
+  const scoreColor = score >= 85 ? chalk.green : score >= 60 ? chalk.yellow : chalk.red;
+  console.log(chalk.bold('\n🏥 Automated SRE Bottleneck Diagnosis') + ` (Health Score: ${scoreColor.bold(score + '/100')})`);
+  console.log(chalk.gray('─'.repeat(65)));
+
+  if (!diagnosis?.findings || diagnosis.findings.length === 0) {
+    console.log(chalk.green('✓ No bottleneck patterns or systemic anomalies detected. System healthy.\n'));
+    return;
+  }
+
+  for (const f of diagnosis.findings) {
+    const sevColor = f.severity === 'critical' ? chalk.red.bold : chalk.yellow.bold;
+    console.log(`${sevColor('[' + f.category + ']')} ${chalk.bold.white(f.title)}`);
+    console.log(`  ${chalk.gray('Detail:')} ${f.detail}`);
+    console.log(`  ${chalk.cyan('Action:')} ${f.recommendation}\n`);
+  }
 }
 
 function generateTrafficProfile(waveform, options = {}) {
@@ -896,6 +1127,160 @@ function parseOpenApiSpec(content, options = {}) {
     rps: Number(options.rps || 10),
     timeoutMs: Number(options.timeout || 10000),
     endpoints
+  };
+}
+
+function generateCrudScenarioFromOpenApi(content, options = {}) {
+  const spec = typeof content === 'string' ? JSON.parse(content) : content;
+  if (!spec.paths) throw new Error('Invalid OpenAPI/Swagger spec: missing paths');
+
+  let baseUrl = options.baseUrl || '';
+  if (!baseUrl) {
+    if (Array.isArray(spec.servers) && spec.servers[0]?.url) {
+      baseUrl = spec.servers[0].url;
+    } else if (spec.host) {
+      const proto = (spec.schemes && spec.schemes[0]) || 'http';
+      baseUrl = `${proto}://${spec.host}${spec.basePath || ''}`;
+    } else {
+      baseUrl = 'http://localhost:8080';
+    }
+  }
+  baseUrl = baseUrl.replace(/\/$/, '');
+
+  const paths = Object.keys(spec.paths);
+  const resourceGroups = new Map();
+
+  for (const p of paths) {
+    const segments = p.split('/').filter(Boolean);
+    if (!segments.length) continue;
+    const isParam = segments[segments.length - 1].startsWith('{');
+    const baseResource = isParam ? '/' + segments.slice(0, -1).join('/') : p;
+
+    if (!resourceGroups.has(baseResource)) {
+      resourceGroups.set(baseResource, { collectionPath: null, itemPath: null, methods: {} });
+    }
+    const group = resourceGroups.get(baseResource);
+    if (isParam) {
+      group.itemPath = p;
+    } else {
+      group.collectionPath = p;
+    }
+    for (const [m, op] of Object.entries(spec.paths[p])) {
+      group.methods[`${m.toUpperCase()}:${p}`] = op;
+    }
+  }
+
+  const scenarios = [];
+
+  for (const [baseResource, group] of resourceGroups.entries()) {
+    const steps = [];
+    const resourceName = baseResource.split('/').filter(Boolean).pop() || 'item';
+    let idParam = 'createdId';
+    if (group.itemPath) {
+      const match = group.itemPath.match(/\{([^}]+)\}/);
+      if (match && match[1]) {
+        idParam = match[1];
+      }
+    }
+    if (idParam === 'id') {
+      idParam = `${resourceName}Id`;
+    }
+
+    // 1. POST (Create)
+    const postOp = group.collectionPath && group.methods[`POST:${group.collectionPath}`];
+    if (postOp) {
+      steps.push({
+        name: `create-${resourceName}`,
+        method: 'POST',
+        url: `${baseUrl}${group.collectionPath}`,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: `test-${resourceName}-{{$randomAlpha:6}}`, active: true }),
+        extract: { [idParam]: 'body.id' },
+        assertions: [
+          { type: 'status', in: [200, 201] }
+        ]
+      });
+    }
+
+    // 2. GET (Read single or collection)
+    if (group.itemPath && group.methods[`GET:${group.itemPath}`]) {
+      const itemUrl = `${baseUrl}${group.itemPath.replace(/\{[^}]+\}/, `{{${idParam}}}`)}`;
+      steps.push({
+        name: `get-${resourceName}`,
+        method: 'GET',
+        url: itemUrl,
+        assertions: [
+          { type: 'status', equals: 200 }
+        ]
+      });
+    } else if (group.collectionPath && group.methods[`GET:${group.collectionPath}`]) {
+      steps.push({
+        name: `list-${resourceName}`,
+        method: 'GET',
+        url: `${baseUrl}${group.collectionPath}`,
+        assertions: [
+          { type: 'status', equals: 200 }
+        ]
+      });
+    }
+
+    // 3. PUT / PATCH (Update)
+    const putPath = group.itemPath || group.collectionPath;
+    const putOp = putPath && (group.methods[`PUT:${putPath}`] || group.methods[`PATCH:${putPath}`]);
+    if (putOp) {
+      const updateMethod = group.methods[`PUT:${putPath}`] ? 'PUT' : 'PATCH';
+      const updateUrl = group.itemPath 
+        ? `${baseUrl}${group.itemPath.replace(/\{[^}]+\}/, `{{${idParam}}}`)}`
+        : `${baseUrl}${group.collectionPath}`;
+      steps.push({
+        name: `update-${resourceName}`,
+        method: updateMethod,
+        url: updateUrl,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: `updated-${resourceName}`, updated: true }),
+        assertions: [
+          { type: 'status', in: [200, 204] }
+        ]
+      });
+    }
+
+    // 4. DELETE (Cleanup)
+    if (group.itemPath && group.methods[`DELETE:${group.itemPath}`]) {
+      const deleteUrl = `${baseUrl}${group.itemPath.replace(/\{[^}]+\}/, `{{${idParam}}}`)}`;
+      steps.push({
+        name: `delete-${resourceName}`,
+        method: 'DELETE',
+        url: deleteUrl,
+        assertions: [
+          { type: 'status', in: [200, 204] }
+        ]
+      });
+    }
+
+    if (steps.length > 0) {
+      scenarios.push({
+        name: `${resourceName}-lifecycle-journey`,
+        weight: 1,
+        steps
+      });
+    }
+  }
+
+  if (!scenarios.length) {
+    throw new Error('Could not synthesize CRUD scenarios from OpenAPI specification');
+  }
+
+  return {
+    name: spec.info?.title ? `${spec.info.title.toLowerCase().replace(/[^a-z0-9_-]/g, '-')}-scenario` : 'openapi-scenario-journey',
+    durationSeconds: Number(options.duration || 30),
+    concurrency: Number(options.concurrency || 5),
+    rps: Number(options.rps || 10),
+    timeoutMs: Number(options.timeout || 10000),
+    thresholds: {
+      maxErrorRate: 0.01,
+      p95Ms: 500
+    },
+    scenarios
   };
 }
 
@@ -2222,7 +2607,9 @@ async function runTest(config) {
   while (active > 0) await new Promise(resolve => setTimeout(resolve, 50));
   const finishedAt = Date.now();
   console.log(chalk.bold.green('\n✓ Test finished.'));
-  return { summary: summarize(results, startedAt, finishedAt, config), results };
+  const summary = summarize(results, startedAt, finishedAt, config);
+  summary.diagnosis = computeBottleneckDiagnosis(summary, results);
+  return { summary, results };
 }
 
 function ensureDirFor(filePath) { fs.mkdirSync(path.dirname(filePath), { recursive: true }); }
@@ -2363,6 +2750,31 @@ function writeHtmlReport(filePath, summary, results) {
     </div>`;
   }
 
+  // SRE Diagnosis Box
+  const diag = summary.diagnosis || computeBottleneckDiagnosis(summary, results);
+  let diagHtml = '';
+  if (diag && diag.findings && diag.findings.length) {
+    const scoreColor = diag.healthScore >= 85 ? '#10b981' : diag.healthScore >= 60 ? '#f59e0b' : '#ef4444';
+    diagHtml = `<div class="card" style="margin-bottom:24px;border-left:4px solid ${scoreColor};">
+      <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;">
+        <span>🏥 SRE Bottleneck Diagnosis</span>
+        <span class="badge" style="background:${scoreColor}22;color:${scoreColor};font-size:12px;">Health Score: ${diag.healthScore}/100</span>
+      </div>
+      <div style="padding:16px;">
+        ${diag.findings.map(f => `
+          <div style="margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid rgba(255,255,255,0.06);">
+            <div style="font-weight:700;color:#f8fafc;display:flex;align-items:center;gap:8px;">
+              <span class="badge ${f.severity === 'critical' ? 'badge-danger' : 'badge-warning'}">[${htmlEscape(f.category)}]</span>
+              <span>${htmlEscape(f.title)}</span>
+            </div>
+            <div style="font-size:13px;color:#94a3b8;margin-top:4px;">${htmlEscape(f.detail)}</div>
+            <div style="font-size:12px;color:#38bdf8;margin-top:4px;"><b>SRE Action:</b> ${htmlEscape(f.recommendation)}</div>
+          </div>
+        `).join('')}
+      </div>
+    </div>`;
+  }
+
   // 4. Bandwidth formatted
   let throughputStr = 'N/A';
   let totalDataStr = 'N/A';
@@ -2444,6 +2856,7 @@ function writeHtmlReport(filePath, summary, results) {
       </div>
     </div>
 
+    ${diagHtml}
     ${anomalyHtml}
 
     <div class="kpi-grid">
@@ -2644,6 +3057,14 @@ ${summary.assertionFailures && Object.keys(summary.assertionFailures).length > 0
 ## Assertion Failures
 
 ${Object.entries(summary.assertionFailures).map(([key, count]) => `- **${key}**: ${count} failures`).join('\n')}
+` : ''}
+
+${summary.diagnosis?.findings?.length ? `
+## 🏥 SRE Bottleneck Diagnosis (Health Score: ${summary.diagnosis.healthScore}/100)
+
+| Category | Severity | Finding | SRE Recommendation |
+|----------|----------|---------|-------------------|
+${summary.diagnosis.findings.map(f => `| \`${f.category}\` | **${f.severity}** | **${f.title}**: ${f.detail} | ${f.recommendation} |`).join('\n')}
 ` : ''}
 
 ---
@@ -2863,6 +3284,10 @@ function printSummary(summary) {
     for (const [key, count] of Object.entries(summary.assertionFailures)) {
       console.log(chalk.yellow(`  ${key}: ${count} failures`));
     }
+  }
+
+  if (summary.diagnosis) {
+    printBottleneckDiagnosis(summary.diagnosis);
   }
 }
 
@@ -3709,6 +4134,17 @@ async function main() {
     if (diffResult.isRegression) process.exitCode = 1;
     return;
   }
+  if (command === 'diagnose' || command === 'blame') {
+    const file = args._[1] || args.file || args.report;
+    if (!file) throw new Error('diagnose requires a report file: sll diagnose <report.json>');
+    const report = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const summary = report.summary || report;
+    const results = report.results || [];
+    const diag = summary.diagnosis || computeBottleneckDiagnosis(summary, results);
+    printBottleneckDiagnosis(diag);
+    if (diag.healthScore < 50) process.exitCode = 1;
+    return;
+  }
   if (command === 'ui' || command === 'studio') {
     const port = Number(args.port || process.env.PORT || 3001);
     process.env.PORT = String(port);
@@ -3791,6 +4227,20 @@ async function main() {
       console.log(chalk.green(`✓ Converted OpenAPI Spec to ${args.out} (${configOut.endpoints.length} endpoints)`));
     } else {
       console.log(JSON.stringify(configOut, null, 2));
+    }
+    return;
+  }
+  if (command === 'autogen-flow' || command === 'generate-journey') {
+    const file = args._[1] || args.file;
+    if (!file) throw new Error('autogen-flow requires an OpenAPI/Swagger spec: sll autogen-flow <openapi.json>');
+    const content = fs.readFileSync(file, 'utf8');
+    const scenarioConfig = generateCrudScenarioFromOpenApi(content, args);
+    if (args.out) {
+      ensureDirFor(args.out);
+      fs.writeFileSync(args.out, JSON.stringify(scenarioConfig, null, 2));
+      console.log(chalk.green(`✓ Synthesized CRUD Journey Scenario in ${args.out} (${scenarioConfig.scenarios.length} scenarios)`));
+    } else {
+      console.log(JSON.stringify(scenarioConfig, null, 2));
     }
     return;
   }
@@ -4025,6 +4475,9 @@ export {
   generateCapacityMarkdownReport,
   writeCapacityHtmlReport,
   saveCapacityReports,
-  writeHtmlReport
+  writeHtmlReport,
+  computeBottleneckDiagnosis,
+  printBottleneckDiagnosis,
+  generateCrudScenarioFromOpenApi
 };
 

@@ -616,6 +616,25 @@ app.get('/api/reports/:name/badge', (req, res) => {
   }
 });
 
+// SRE Bottleneck Diagnosis for a report
+app.get('/api/reports/:name/diagnosis', (req, res) => {
+  const safeName = sanitizeName(req.params.name);
+  const reportPath = path.join(REPORTS_DIR, `${safeName}.json`);
+  if (!fs.existsSync(reportPath)) {
+    return res.status(404).json({ error: 'Report not found' });
+  }
+  try {
+    const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+    const summary = report.summary || report;
+    const results = report.results || [];
+    if (!sll) return res.status(503).json({ error: 'Engine helper initializing' });
+    const diagnosis = summary.diagnosis || sll.computeBottleneckDiagnosis(summary, results);
+    res.json(diagnosis);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Compare two test reports
 app.post('/api/reports/compare', (req, res) => {
   const { reportA, reportB } = req.body;
@@ -667,6 +686,19 @@ app.post('/api/import/openapi', (req, res) => {
   try {
     if (!sll) return res.status(503).json({ error: 'Engine helper initializing' });
     const config = sll.parseOpenApiSpec(content, { duration, concurrency, rps, baseUrl });
+    res.json(config);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Synthesize CRUD Journey Flow from OpenAPI / Swagger Spec
+app.post('/api/import/openapi-flow', (req, res) => {
+  const { content, duration, concurrency, rps, baseUrl } = req.body;
+  if (!content) return res.status(400).json({ error: 'OpenAPI specification JSON required' });
+  try {
+    if (!sll) return res.status(503).json({ error: 'Engine helper initializing' });
+    const config = sll.generateCrudScenarioFromOpenApi(content, { duration, concurrency, rps, baseUrl });
     res.json(config);
   } catch (err) {
     res.status(400).json({ error: err.message });

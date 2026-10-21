@@ -33,7 +33,9 @@ import {
   runCapacityTest,
   generateCapacityMarkdownReport,
   writeCapacityHtmlReport,
-  writeHtmlReport
+  writeHtmlReport,
+  computeBottleneckDiagnosis,
+  generateCrudScenarioFromOpenApi
 } from '../bin/safe-load-lab.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -1011,6 +1013,183 @@ test('QA Capacity Engine - handles positional URL and step-inc argument', async 
     server.close();
   }
 });
+
+// ─── 24. SRE Bottleneck Diagnosis & OpenAPI Journey Generator QA Tests ──
+
+test('QA SRE Diagnosis - detects endpoint latency mass, tail amplification, and gateway errors', () => {
+  const summary = {
+    totals: { requests: 200, failed: 20, errorRate: 0.1 },
+    latencyMs: { p50: 20, p95: 120 },
+    statusCodes: { 200: 180, 504: 15, 429: 5 },
+    endpointSummary: {
+      '/api/checkout': { requests: 50, avg: 400 },
+      '/api/items': { requests: 150, avg: 20 }
+    }
+  };
+
+  const diag = computeBottleneckDiagnosis(summary, []);
+  assert.ok(diag.healthScore < 80);
+  assert.ok(diag.findings.length >= 3);
+
+  const categories = diag.findings.map(f => f.category);
+  assert.ok(categories.includes('ENDPOINT_BOTTLENECK'));
+  assert.ok(categories.includes('TAIL_AMPLIFICATION'));
+  assert.ok(categories.includes('GATEWAY_TIMEOUT'));
+  assert.ok(categories.includes('RATE_LIMIT_EXCEEDED'));
+
+  const epFinding = diag.findings.find(f => f.category === 'ENDPOINT_BOTTLENECK');
+  assert.match(epFinding.title, /\/api\/checkout/);
+  assert.match(epFinding.recommendation, /checkout/i);
+});
+
+test('QA SRE Diagnosis - detects cold start lag and late-stage cascading leaks', () => {
+  // Test cold start: first 10 requests slow, next 20 fast
+  const coldStartResults = [
+    ...Array.from({ length: 10 }, (_, i) => ({ timestamp: 1000 + i * 10, duration: 500 })),
+    ...Array.from({ length: 20 }, (_, i) => ({ timestamp: 1200 + i * 10, duration: 25 }))
+  ];
+  const diagCold = computeBottleneckDiagnosis({ totals: { requests: 30, failed: 0, errorRate: 0 }, latencyMs: { p50: 30, p95: 500 } }, coldStartResults);
+  const coldFinding = diagCold.findings.find(f => f.category === 'COLD_START_LAG');
+  assert.ok(coldFinding);
+  assert.match(coldFinding.recommendation, /JIT|warmup|provisioned/i);
+
+  // Test cascading leak: first 20 fast, last 10 slow
+  const leakResults = [
+    ...Array.from({ length: 20 }, (_, i) => ({ timestamp: 1000 + i * 10, duration: 25 })),
+    ...Array.from({ length: 10 }, (_, i) => ({ timestamp: 1500 + i * 10, duration: 600 }))
+  ];
+  const diagLeak = computeBottleneckDiagnosis({ totals: { requests: 30, failed: 0, errorRate: 0 }, latencyMs: { p50: 30, p95: 600 } }, leakResults);
+  const leakFinding = diagLeak.findings.find(f => f.category === 'CASCADING_LEAK');
+  assert.ok(leakFinding);
+  assert.match(leakFinding.recommendation, /connection pool|memory leak|exhaustion/i);
+});
+
+test('QA OpenAPI Journey Generator - synthesizes complete CRUD journey with dynamic variable passing', () => {
+  const openApiSpec = {
+    openapi: '3.0.0',
+    info: { title: 'Order Service', version: '1.0.0' },
+    servers: [{ url: 'https://api.example.com/v1' }],
+    paths: {
+      '/orders': {
+        post: { summary: 'Create Order' },
+        get: { summary: 'List Orders' }
+      },
+      '/orders/{orderId}': {
+        get: { summary: 'Get Order' },
+        put: { summary: 'Update Order' },
+        delete: { summary: 'Delete Order' }
+      }
+    }
+  };
+
+  const journey = generateCrudScenarioFromOpenApi(openApiSpec, { duration: 45, concurrency: 8, rps: 25 });
+  assert.equal(journey.durationSeconds, 45);
+  assert.equal(journey.concurrency, 8);
+  assert.equal(journey.rps, 25);
+  assert.ok(journey.scenarios.length >= 1);
+
+  const orderScenario = journey.scenarios.find(s => s.name.includes('order'));
+  assert.ok(orderScenario);
+  assert.equal(orderScenario.steps.length, 4);
+
+  // Step 1: POST
+  const createStep = orderScenario.steps[0];
+  assert.equal(createStep.method, 'POST');
+  assert.equal(createStep.url, 'https://api.example.com/v1/orders');
+  assert.ok(createStep.extract.orderId);
+  assert.deepEqual(createStep.assertions[0].in, [200, 201]);
+
+  // Step 2: GET with {{orderId}}
+  const getStep = orderScenario.steps[1];
+  assert.equal(getStep.method, 'GET');
+  assert.equal(getStep.url, 'https://api.example.com/v1/orders/{{orderId}}');
+  assert.equal(getStep.assertions[0].equals, 200);
+
+  // Step 3: PUT with {{orderId}}
+  const updateStep = orderScenario.steps[2];
+  assert.equal(updateStep.method, 'PUT');
+  assert.equal(updateStep.url, 'https://api.example.com/v1/orders/{{orderId}}');
+
+  // Step 4: DELETE with {{orderId}}
+  const deleteStep = orderScenario.steps[3];
+  assert.equal(deleteStep.method, 'DELETE');
+  assert.equal(deleteStep.url, 'https://api.example.com/v1/orders/{{orderId}}');
+});
+
+test('QA CLI diagnose & autogen-flow commands', () => {
+  const tempDir = path.join(root, 'reports', 'test-cli-diag-tmp');
+  fs.mkdirSync(tempDir, { recursive: true });
+
+  const reportPath = path.join(tempDir, 'sample-report.json');
+  const specPath = path.join(tempDir, 'sample-spec.json');
+
+  const sampleReport = {
+    summary: {
+      totals: { requests: 100, failed: 0, errorRate: 0.0 },
+      latencyMs: { p50: 15, p95: 30, avg: 18 },
+      statusCodes: { 200: 100 },
+      endpointSummary: {
+        '/fast': { requests: 50, avg: 15 },
+        '/api': { requests: 50, avg: 20 }
+      }
+    },
+    results: []
+  };
+
+  const sampleUnhealthyReport = {
+    summary: {
+      totals: { requests: 100, failed: 50, errorRate: 0.5 },
+      latencyMs: { p50: 15, p95: 180, avg: 100 },
+      statusCodes: { 200: 50, 504: 50 }
+    },
+    results: []
+  };
+
+  const sampleSpec = {
+    openapi: '3.0.0',
+    info: { title: 'Product API' },
+    paths: {
+      '/products': {
+        post: { summary: 'Create' },
+        get: { summary: 'List' }
+      },
+      '/products/{id}': {
+        get: { summary: 'Get' },
+        delete: { summary: 'Delete' }
+      }
+    }
+  };
+
+  try {
+    fs.writeFileSync(reportPath, JSON.stringify(sampleReport));
+    fs.writeFileSync(specPath, JSON.stringify(sampleSpec));
+
+    // Test sll diagnose with healthy report (exit code 0)
+    const diagRes = runCLI(['diagnose', reportPath]);
+    assert.equal(diagRes.status, 0);
+    assert.match(diagRes.stdout, /SRE Bottleneck Diagnosis/i);
+    assert.match(diagRes.stdout, /Health Score/i);
+
+    // Test sll diagnose with critical failing report (exit code 1)
+    const unhealthyPath = path.join(tempDir, 'unhealthy-report.json');
+    fs.writeFileSync(unhealthyPath, JSON.stringify(sampleUnhealthyReport));
+    const diagUnhealthyRes = runCLI(['diagnose', unhealthyPath]);
+    assert.equal(diagUnhealthyRes.status, 1);
+    assert.match(diagUnhealthyRes.stdout, /GATEWAY_TIMEOUT/);
+
+    // Test sll autogen-flow
+    const outFlowPath = path.join(tempDir, 'journey.json');
+    const flowRes = runCLI(['autogen-flow', specPath, '--out', outFlowPath]);
+    assert.equal(flowRes.status, 0);
+    assert.ok(fs.existsSync(outFlowPath));
+    const flowData = JSON.parse(fs.readFileSync(outFlowPath, 'utf8'));
+    assert.ok(flowData.scenarios.length >= 1);
+    assert.equal(flowData.scenarios[0].steps[0].method, 'POST');
+  } finally {
+    try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {}
+  }
+});
+
 
 
 
