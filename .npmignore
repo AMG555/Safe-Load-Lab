@@ -1,0 +1,7 @@
+**/node_modules/
+reports/
+tests/
+.git/
+.github/
+.vscode/
+.DS_Store

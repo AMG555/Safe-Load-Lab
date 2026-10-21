@@ -8,6 +8,17 @@
     "sll": "./bin/safe-load-lab.js"
   },
   "main": "./bin/safe-load-lab.js",
+  "files": [
+    "bin",
+    "ui/public",
+    "ui/server.js",
+    "ui/package.json",
+    "ui/README.md",
+    "schema",
+    "examples",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "start": "node ./bin/safe-load-lab.js",
     "mock": "node ./bin/safe-load-lab.js mock",
