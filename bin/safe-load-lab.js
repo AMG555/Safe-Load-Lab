@@ -4194,7 +4194,10 @@ async function main() {
     const port = Number(args.port || process.env.PORT || 3001);
     process.env.PORT = String(port);
     const uiServerPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'ui', 'server.js');
-    const { default: app } = await import(pathToFileURL(uiServerPath).href);
+    const toUrl = typeof pathToFileURL === 'function'
+      ? pathToFileURL
+      : (p) => new URL(`file:///${path.resolve(p).replace(/\\/g, '/')}`);
+    const { default: app } = await import(toUrl(uiServerPath).href);
     const srv = app.listen(port, () => {
       console.log(chalk.bold.green(`✓ Safe Load Lab Studio running on http://localhost:${port}`));
       console.log(chalk.gray('  Interactive visual workspace for scenario builder, live telemetry, and exports.'));

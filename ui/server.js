@@ -21,9 +21,10 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001;
 const REPORTS_DIR = path.join(__dirname, '..', 'reports');
 const CLI_PATH = path.join(__dirname, '..', 'bin', 'safe-load-lab.js');
 
-const { pathToFileURL } = require('url');
+const urlModule = require('url');
+const toFileUrl = urlModule.pathToFileURL || ((p) => new URL(`file:///${path.resolve(p).replace(/\\/g, '/')}`));
 let sll = null;
-import(pathToFileURL(CLI_PATH).href).then(m => { sll = m; }).catch(err => {
+import(toFileUrl(CLI_PATH).href).then(m => { sll = m; }).catch(err => {
   console.error('Failed to import CLI helpers:', err.message);
 });
 
