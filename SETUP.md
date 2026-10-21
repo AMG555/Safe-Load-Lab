@@ -82,11 +82,29 @@ sll help
 You should see commands like:
 
 ```text
+ui, studio
+wizard, init
+diagnose, blame
+autogen-flow, generate-journey
+capacity, break
+bench, quick
 run
+probe, ping
+ci
+ab, diff
+mock
+import-curl
+import-postman
+import-openapi
+import-har
+spike
+soak
+stress
 validate
 plan
 sample
 rate-limit
+compare
 version
 help
 ```

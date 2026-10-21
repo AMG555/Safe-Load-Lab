@@ -100,7 +100,29 @@ npx sll help
 
 ## Quick Start
 
-### One-Command Test
+### Option A: Web Studio (Easiest / Zero JSON)
+
+```bash
+# Launch visual studio from workspace root:
+npm start
+
+# Or with global CLI:
+sll ui
+```
+Open **`http://localhost:3001`** in your browser. Configure target URLs, waveforms, authentication with dynamic login token extraction, multi-step scenario flows, and execute tests directly with live real-time telemetry.
+
+### Option B: Interactive Terminal Wizard
+
+```bash
+# Guided step-by-step terminal questionnaire:
+npm run wizard
+
+# Or with global CLI:
+sll wizard
+```
+Answers 4 quick prompts (Target URL, Duration, Concurrency, RPS) and executes immediately or outputs the exact CLI command.
+
+### Option C: One-Command Test
 
 ```bash
 sll run \
@@ -111,7 +133,7 @@ sll run \
   --i-own-this-target
 ```
 
-### Config-Based Test
+### Option D: Config-Based Test
 
 ```bash
 # Create a sample config
@@ -135,6 +157,8 @@ sll plan --config examples/advanced.json --env local
 
 | Command | Description |
 |---------|-------------|
+| `ui`, `studio` | Launch interactive visual Web Studio at `http://localhost:3001` |
+| `wizard`, `init` | Step-by-step interactive CLI questionnaire to configure and run tests |
 | `diagnose`, `blame` | Automated SRE root-cause bottleneck diagnosis & 0–100 health scoring for test reports |
 | `autogen-flow`, `generate-journey` | Synthesize complete CRUD lifecycle journey scenarios from OpenAPI/Swagger spec |
 | `capacity`, `break` | Autonomous breaking point discovery with 80% safe headroom production sizing |

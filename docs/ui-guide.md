@@ -4,7 +4,17 @@
 
 ### Step 1: Start the Web UI
 
-**Windows:**
+**From workspace root:**
+```bash
+npm start
+```
+
+**Or using global CLI:**
+```bash
+sll ui
+```
+
+**Windows Shortcut:**
 - Double-click `start-ui.bat`
 
 **macOS/Linux:**
@@ -12,20 +22,14 @@
 bash start-ui.sh
 ```
 
-Or manually:
-```bash
-cd ui
-npm start
-```
-
 ### Step 2: Open in Browser
 
-When you see the message "Safe Load Lab UI running at http://localhost:3001", open:
+When you see the message `✓ Safe Load Lab Studio running on http://localhost:3001`, open:
 ```
 http://localhost:3001
 ```
 
-You'll see the Safe Load Lab dashboard.
+You will see the Safe Load Lab Studio dashboard.
 
 ---
 
@@ -271,7 +275,11 @@ P99 Latency 2000ms = Needs optimization
 A: Only if you own it and have permission. The tool is designed for safe testing of your own systems.
 
 **Q: How do I test authenticated endpoints?**
-A: Use Advanced mode with full JSON config that includes auth headers.
+A: In **Quick Mode**, select **"Dynamic Login Step (Auto-Extract Token)"** under the **Authentication Header** dropdown. Fill in:
+1. **Login Endpoint URL**: e.g. `http://localhost:3000/api/auth/login`
+2. **Token JSONPath**: e.g. `token` or `data.access_token`
+3. **Login Payload (JSON)**: `{"username": "admin", "password": "secret"}`
+Safe Load Lab automatically calls the login endpoint before the test, extracts the token, and attaches `Authorization: Bearer <token>` to all load requests. Alternatively, you can pick "Bearer Token" for static tokens or "API Key Header".
 
 **Q: Why are my results inconsistent?**
 A: Network, CPU, and disk I/O vary. Run multiple tests for better average results.

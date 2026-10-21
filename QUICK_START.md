@@ -8,9 +8,45 @@ npm install -g safe-load-lab
 npx safe-load-lab help
 ```
 
-## 5-Minute Quick Start
+## 🚀 The Fastest Ways to Start
 
-### 1. Basic Test (30 seconds)
+### 1. Visual Web Studio (Zero Config / Zero JSON)
+
+```bash
+# Start studio from workspace root:
+npm start
+
+# Or with global CLI:
+sll ui
+```
+Open **`http://localhost:3001`** in browser. Fill in Target URL, Concurrency, and RPS in visual forms. Click **"Run Test"** to see live graphs and telemetry.
+
+To test authenticated endpoints:
+- Select **"Dynamic Login Step (Auto-Extract Token)"** in Authentication dropdown.
+- Enter login endpoint (e.g., `/api/auth/login`), JSONPath (e.g., `token`), and credentials body.
+- Safe Load Lab auto-logs in before the test and injects Bearer token into all requests.
+
+### 2. Interactive Terminal Wizard (No JSON Editing)
+
+```bash
+# Start wizard from workspace root:
+npm run wizard
+
+# Or with global CLI:
+sll wizard
+```
+Answers 4 step-by-step terminal prompts:
+- Target URL
+- Duration (s)
+- Concurrency (virtual users)
+- Target RPS
+Choose **"Y"** to run immediately.
+
+---
+
+## 5-Minute Command Line Quick Start
+
+### 1. Basic CLI Test (30 seconds)
 
 ```bash
 sll run \

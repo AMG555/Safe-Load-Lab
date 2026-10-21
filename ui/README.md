@@ -25,6 +25,16 @@ npm install
 
 ## Running the UI
 
+From the main workspace root:
+
+```bash
+npm start
+# or
+sll ui
+```
+
+Or from the `ui/` directory:
+
 ```bash
 npm start
 ```

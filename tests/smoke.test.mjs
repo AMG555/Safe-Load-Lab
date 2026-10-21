@@ -45,3 +45,27 @@ test('prints help with ab, mock, and import-curl commands', () => {
   assert.match(res.stdout, /ui, studio/);
 });
 
+test('boots ui server without runtime exceptions', async () => {
+  const proc = spawnSync(process.execPath, [
+    '-e',
+    `const { spawn } = require('child_process');
+     const p = spawn(process.execPath, ['${cli.replace(/\\/g, '/')}', 'ui', '--port', '4988'], { stdio: ['ignore', 'pipe', 'pipe'] });
+     let buf = '';
+     p.stdout.on('data', d => {
+       buf += d.toString();
+       if (buf.includes('Safe Load Lab Studio running')) {
+         p.kill();
+         process.exit(0);
+       }
+     });
+     p.stderr.on('data', d => {
+       console.error(d.toString());
+       p.kill();
+       process.exit(1);
+     });
+     setTimeout(() => { p.kill(); process.exit(2); }, 3500);`
+  ], { encoding: 'utf8' });
+  assert.equal(proc.status, 0, proc.stderr || 'UI failed to boot');
+});
+
+
