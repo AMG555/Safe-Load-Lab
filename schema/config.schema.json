@@ -31,6 +31,21 @@
         }
       }
     },
+    "waveform": {
+      "type": "string",
+      "enum": ["constant", "sine", "ladder", "burst"]
+    },
+    "waveformOptions": {
+      "type": "object",
+      "properties": {
+        "minRps": { "type": "number", "minimum": 1 },
+        "maxRps": { "type": "number", "minimum": 1 },
+        "baseRps": { "type": "number", "minimum": 1 },
+        "peakRps": { "type": "number", "minimum": 1 },
+        "duration": { "type": "number", "minimum": 1 },
+        "cycles": { "type": "number", "minimum": 1 }
+      }
+    },
     "thresholds": {
       "type": "object",
       "properties": {

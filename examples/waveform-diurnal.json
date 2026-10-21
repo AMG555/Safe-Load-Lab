@@ -1,0 +1,31 @@
+{
+  "name": "diurnal-waveform-test",
+  "waveform": "sine",
+  "waveformOptions": {
+    "baseRps": 5,
+    "peakRps": 25,
+    "duration": 60,
+    "cycles": 2
+  },
+  "concurrency": 5,
+  "timeoutMs": 5000,
+  "thresholds": {
+    "maxErrorRate": 0.01,
+    "p95Ms": 300,
+    "p99Ms": 600
+  },
+  "endpoints": [
+    {
+      "name": "fast-endpoint",
+      "method": "GET",
+      "url": "http://localhost:8080/fast",
+      "weight": 3
+    },
+    {
+      "name": "json-endpoint",
+      "method": "GET",
+      "url": "http://localhost:8080/json",
+      "weight": 1
+    }
+  ]
+}

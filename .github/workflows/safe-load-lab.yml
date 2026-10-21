@@ -64,6 +64,20 @@ jobs:
             --out reports/ab-test.json \
             --html reports/ab-test.html \
             --markdown reports/ab-test.md
+      - name: Run autonomous capacity discovery test
+        run: |
+          sll capacity http://127.0.0.1:8080/fast \
+            --sla 200 \
+            --max-rps 15 \
+            --step-duration 2 \
+            --step-inc 5 \
+            --i-own-this-target \
+            --out reports/capacity-test.json \
+            --html reports/capacity-test.html \
+            --markdown reports/capacity-test.md
+      - name: Validate waveform configuration
+        run: |
+          sll validate --config examples/waveform-diurnal.json
       - name: Upload reports
         uses: actions/upload-artifact@v4
         if: always()
