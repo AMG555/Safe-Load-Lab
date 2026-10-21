@@ -6,6 +6,7 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { performance } from 'node:perf_hooks';
+import readline from 'node:readline';
 import chalk from 'chalk';
 import cliProgress from 'cli-progress';
 
@@ -4112,6 +4113,45 @@ async function saveCapacityReports(args, cap) {
   }
 }
 
+async function runInteractiveWizard() {
+  console.log(chalk.bold.cyan('\n🧙 Safe Load Lab — Interactive Setup Wizard'));
+  console.log(chalk.gray('Configure a load test interactively without manual JSON editing.\n'));
+
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const ask = (q, defaultVal) => new Promise(res => {
+    rl.question(chalk.bold.white(q) + (defaultVal ? chalk.gray(` [${defaultVal}]: `) : ': '), ans => {
+      res(ans.trim() || defaultVal);
+    });
+  });
+
+  try {
+    const url = await ask('Target URL', 'http://127.0.0.1:8080/fast');
+    const duration = parseInt(await ask('Duration in seconds', '10'), 10) || 10;
+    const concurrency = parseInt(await ask('Concurrency (simultaneous workers)', '5'), 10) || 5;
+    const rps = parseInt(await ask('Target RPS cap', '10'), 10) || 10;
+    const confirmed = await ask('Run test now against this target? (y/n)', 'y');
+    rl.close();
+
+    if (confirmed.toLowerCase().startsWith('y')) {
+      const config = normalizeConfig({
+        url,
+        duration,
+        concurrency,
+        rps,
+        'i-own-this-target': true
+      });
+      const { summary } = await runTest(config);
+      printSummary(summary);
+    } else {
+      console.log(chalk.yellow('\nExecution skipped. You can run anytime with:'));
+      console.log(chalk.cyan(`sll run --url ${url} --duration ${duration} --concurrency ${concurrency} --rps ${rps} --i-own-this-target\n`));
+    }
+  } catch (err) {
+    rl.close();
+    throw err;
+  }
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   
@@ -4122,6 +4162,10 @@ async function main() {
   }
   
   const command = args._[0] || 'help';
+  if (command === 'wizard' || command === 'interactive' || command === 'init') {
+    await runInteractiveWizard();
+    return;
+  }
   if (command === 'help' || args.help) { printHelp(); return; }
   if (command === 'version' || args.version) { console.log(VERSION); return; }
   if (command === 'sample') { createSample(args.out || 'load-test.json'); return; }
@@ -4479,6 +4523,7 @@ export {
   writeHtmlReport,
   computeBottleneckDiagnosis,
   printBottleneckDiagnosis,
-  generateCrudScenarioFromOpenApi
+  generateCrudScenarioFromOpenApi,
+  runInteractiveWizard
 };
 

@@ -761,6 +761,7 @@
                   <option value="bearer">Bearer Token</option>
                   <option value="basic">Basic Auth</option>
                   <option value="apikey">API Key Header</option>
+                  <option value="oauth_setup">Dynamic Login Step (Auto-Extract Token)</option>
                 </select>
               </div>
             </div>
@@ -789,6 +790,26 @@
                   <label>API Key Value</label>
                   <input type="text" id="authApiKeyValue" placeholder="key_live_...">
                 </div>
+              </div>
+              <div id="authSetupRow" style="display:none;background:var(--bg-canvas);border:1px solid var(--accent);border-radius:6px;padding:12px;margin-top:6px;">
+                <div style="font-weight:700;color:var(--accent);font-size:12px;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.04em;display:flex;align-items:center;gap:6px;">
+                  <span>🔑</span> Pre-Test Login Step (Token Extraction)
+                </div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>Login Endpoint URL *</label>
+                    <input type="url" id="authSetupUrl" placeholder="http://127.0.0.1:8080/auth/token" value="http://127.0.0.1:8080/auth/token">
+                  </div>
+                  <div class="form-group">
+                    <label>Token Field in Response *</label>
+                    <input type="text" id="authSetupTokenPath" value="token" placeholder="token or access_token">
+                  </div>
+                </div>
+                <div class="form-group" style="margin-bottom:0;">
+                  <label>Login Payload (JSON)</label>
+                  <textarea id="authSetupBody" rows="2" style="font-family:var(--font-mono);font-size:12px;" placeholder='{"username": "admin", "password": "password"}'>{"username": "admin", "password": "password"}</textarea>
+                </div>
+                <div class="input-hint" style="margin-top:6px;">Executes once before load test starts, extracts auth token, and injects <code>Authorization: Bearer {{authToken}}</code> into requests.</div>
               </div>
             </div>
 
@@ -1502,11 +1523,13 @@
       const bearerRow = document.getElementById('authBearerRow');
       const basicRow = document.getElementById('authBasicRow');
       const apiKeyRow = document.getElementById('authApiKeyRow');
+      const setupRow = document.getElementById('authSetupRow');
 
       box.style.display = auth === 'none' ? 'none' : 'block';
       bearerRow.style.display = auth === 'bearer' ? 'block' : 'none';
       basicRow.style.display = auth === 'basic' ? 'grid' : 'none';
       apiKeyRow.style.display = auth === 'apikey' ? 'grid' : 'none';
+      if (setupRow) setupRow.style.display = auth === 'oauth_setup' ? 'block' : 'none';
     }
 
     function addHeaderRow(key = '', val = '') {
@@ -1679,6 +1702,7 @@
       });
 
       // Collect auth headers
+      let setupSteps = undefined;
       const auth = document.getElementById('authType').value;
       if (auth === 'bearer') {
         const token = document.getElementById('authBearerToken').value.trim();
@@ -1691,6 +1715,21 @@
         const k = document.getElementById('authApiKeyName').value.trim();
         const v = document.getElementById('authApiKeyValue').value.trim();
         if (k && v) headers[k] = v;
+      } else if (auth === 'oauth_setup') {
+        const setupUrl = document.getElementById('authSetupUrl')?.value.trim();
+        const tokenPath = document.getElementById('authSetupTokenPath')?.value.trim() || 'token';
+        const setupBody = document.getElementById('authSetupBody')?.value.trim();
+        if (setupUrl) {
+          setupSteps = [{
+            name: 'auth-login',
+            url: setupUrl,
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: setupBody || undefined,
+            extract: { authToken: tokenPath.startsWith('body.') ? tokenPath : `body.${tokenPath}` }
+          }];
+          headers['Authorization'] = 'Bearer {{authToken}}';
+        }
       }
 
       if (currentWorkflowMode === 'scenario') {
@@ -1731,6 +1770,7 @@
           trafficWaveform: waveform,
           capacityOptions,
           timeoutMs: 10000,
+          setup: setupSteps,
           endpoints,
           data: parsedCsvRows && parsedCsvRows.length ? parsedCsvRows : undefined
         };
@@ -1762,6 +1802,7 @@
         trafficWaveform: waveform,
         capacityOptions,
         timeoutMs: 10000,
+        setup: setupSteps,
         endpoints: [
           { name: "endpoint", url, method, headers, body, weight: 1 }
         ],
