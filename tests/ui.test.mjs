@@ -240,4 +240,25 @@ test('UI Server API Suite', async (t) => {
     // Stop mock server
     await requestJson('/api/mock/stop', { method: 'POST' });
   });
+
+  await t.test('POST /api/import/openapi-flow synthesizes CRUD journey in UI server', async () => {
+    const spec = {
+      openapi: '3.0.0',
+      info: { title: 'Store' },
+      paths: {
+        '/items': { post: {}, get: {} },
+        '/items/{id}': { get: {}, put: {}, delete: {} }
+      }
+    };
+    const { status, data } = await requestJson('/api/import/openapi-flow', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: spec, duration: 20 })
+    });
+    assert.equal(status, 200);
+    assert.ok(data.scenarios.length >= 1);
+    assert.equal(data.scenarios[0].steps[0].method, 'POST');
+    assert.ok(data.scenarios[0].steps[0].extract.itemId);
+  });
 });
+

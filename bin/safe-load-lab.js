@@ -1174,7 +1174,8 @@ function generateCrudScenarioFromOpenApi(content, options = {}) {
 
   for (const [baseResource, group] of resourceGroups.entries()) {
     const steps = [];
-    const resourceName = baseResource.split('/').filter(Boolean).pop() || 'item';
+    const rawName = baseResource.split('/').filter(Boolean).pop() || 'item';
+    const resourceName = rawName.endsWith('s') && rawName.length > 2 ? rawName.slice(0, -1) : rawName;
     let idParam = 'createdId';
     if (group.itemPath) {
       const match = group.itemPath.match(/\{([^}]+)\}/);

@@ -572,7 +572,7 @@
       <div class="brand" onclick="switchNav('workbench')">
         <div class="brand-icon">⚡</div>
         <div>Safe Load Lab</div>
-        <span class="version-tag">v2.3.0</span>
+        <span class="version-tag">v2.4.0</span>
       </div>
 
       <nav class="nav-tabs">
@@ -1028,6 +1028,7 @@
               </div>
               <div style="display:flex;gap:8px;flex-wrap:wrap;">
                 <button class="btn btn-secondary btn-sm" onclick="viewCurrentHtmlReport()">Open HTML</button>
+                <button class="btn btn-secondary btn-sm" onclick="viewCurrentDiagnosis()">🏥 SRE Diagnosis</button>
                 <button class="btn btn-secondary btn-sm" onclick="downloadCurrentCsv()">Download CSV</button>
                 <button class="btn btn-secondary btn-sm" onclick="viewCurrentMarkdown()">View Markdown</button>
                 <button class="btn btn-secondary btn-sm" onclick="viewCurrentPrometheus()">Prometheus</button>
@@ -1200,7 +1201,10 @@
             <div>
               <label>OpenAPI / Swagger Spec (JSON)</label>
               <textarea id="openApiInput" rows="4" style="font-family:var(--font-mono);font-size:12px;" placeholder="Paste OpenAPI 3.0 or Swagger 2.0 JSON here..."></textarea>
-              <button class="btn btn-secondary btn-sm" style="margin-top:6px;" onclick="importOpenApiJson()">Import OpenAPI Spec</button>
+              <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;">
+                <button class="btn btn-secondary btn-sm" onclick="importOpenApiJson()">Import OpenAPI Spec</button>
+                <button class="btn btn-primary btn-sm" onclick="importOpenApiCrudJourney()">🔄 Auto-Generate CRUD Journey</button>
+              </div>
             </div>
             <div>
               <label>Browser HAR Recording (JSON)</label>
@@ -1385,6 +1389,25 @@
             <button type="button" class="btn btn-secondary btn-sm" onclick="copyScriptExportContent()">Copy Script</button>
             <button type="button" class="btn btn-primary btn-sm" id="btnDownloadExportScript" onclick="downloadScriptExportContent()">Download File</button>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SRE Bottleneck Diagnosis Modal -->
+    <div id="diagnosisModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:999;align-items:center;justify-content:center;padding:20px;">
+      <div class="card" style="max-width:760px;width:100%;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 40px rgba(0,0,0,0.6);">
+        <div class="card-header" style="justify-content:space-between;">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span class="card-title"><span>🏥</span> SRE Bottleneck Diagnosis</span>
+            <span id="diagHealthScoreBadge" class="badge"></span>
+          </div>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="closeDiagnosisModal()">✕</button>
+        </div>
+        <div class="card-body" id="diagModalBody" style="overflow-y:auto;display:flex;flex-direction:column;gap:12px;">
+          <!-- Rendered dynamically -->
+        </div>
+        <div style="padding:12px 18px;background:var(--bg-subtle);border-top:1px solid var(--border-default);display:flex;justify-content:flex-end;">
+          <button type="button" class="btn btn-primary btn-sm" onclick="closeDiagnosisModal()">Close</button>
         </div>
       </div>
     </div>
@@ -2902,6 +2925,7 @@
             </div>
             <div style="display:flex;gap:6px;flex-wrap:wrap;">
               <a href="/api/reports/${r.name}/html" target="_blank" class="btn btn-secondary btn-sm">HTML</a>
+              <button class="btn btn-secondary btn-sm" onclick="viewDiagnosisModal('${r.name}')" title="SRE Diagnosis">🏥 Diagnosis</button>
               <a href="/api/reports/${r.name}/csv" class="btn btn-secondary btn-sm">CSV</a>
               <a href="/api/reports/${r.name}/markdown" target="_blank" class="btn btn-secondary btn-sm">MD</a>
               <a href="/api/reports/${r.name}/prometheus" target="_blank" class="btn btn-secondary btn-sm">Prometheus</a>
@@ -2956,6 +2980,84 @@
 
     function viewCurrentBadge() {
       if (currentReportName) window.open(`/api/reports/${currentReportName}/badge`, '_blank');
+    }
+
+    async function importOpenApiCrudJourney() {
+      const content = document.getElementById('openApiInput').value.trim();
+      if (!content) { alert('Please paste OpenAPI/Swagger JSON first.'); return; }
+
+      try {
+        const res = await fetch('/api/import/openapi-flow', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content, duration: 30, concurrency: 5, rps: 10 })
+        });
+        const config = await res.json();
+        if (config.error) { alert('OpenAPI Journey Generation Error: ' + config.error); return; }
+
+        document.getElementById('advancedJsonBox').style.display = 'block';
+        document.getElementById('advancedJsonText').value = JSON.stringify(config, null, 2);
+        switchNav('workbench');
+        appendConsole(`[AUTOGEN-FLOW] Successfully synthesized CRUD Journey (${config.scenarios.length} scenario(s)) from OpenAPI spec.\n`);
+      } catch (err) {
+        alert('Failed to generate CRUD journey: ' + err.message);
+      }
+    }
+
+    function viewCurrentDiagnosis() {
+      if (currentReportName) viewDiagnosisModal(currentReportName);
+    }
+
+    function closeDiagnosisModal() {
+      document.getElementById('diagnosisModal').style.display = 'none';
+    }
+
+    function viewDiagnosisModal(reportName) {
+      const modal = document.getElementById('diagnosisModal');
+      const body = document.getElementById('diagModalBody');
+      const badge = document.getElementById('diagHealthScoreBadge');
+
+      body.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-dim);">Analyzing report telemetry...</div>';
+      modal.style.display = 'flex';
+
+      fetch(`/api/reports/${reportName}/diagnosis`)
+        .then(r => r.json())
+        .then(diag => {
+          if (diag.error) {
+            body.innerHTML = `<div style="color:var(--danger);padding:10px;">Error: ${diag.error}</div>`;
+            return;
+          }
+          const score = diag.healthScore ?? 100;
+          const scoreColor = score >= 85 ? 'var(--success)' : score >= 60 ? 'var(--warning)' : 'var(--danger)';
+          badge.textContent = `Health Score: ${score}/100`;
+          badge.style.color = scoreColor;
+          badge.style.background = `${scoreColor}22`;
+
+          if (!diag.findings || !diag.findings.length) {
+            body.innerHTML = `
+              <div style="background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.3);padding:16px;border-radius:6px;color:#a7f3d0;">
+                <strong>✓ Zero Bottlenecks Detected</strong>
+                <p style="font-size:13px;margin-top:4px;color:#94a3b8;">System executed within all latency and stability tolerances. No bottleneck patterns discovered.</p>
+              </div>`;
+            return;
+          }
+
+          body.innerHTML = diag.findings.map(f => `
+            <div style="background:var(--bg-canvas);border:1px solid var(--border-default);border-left:4px solid ${f.severity === 'critical' ? 'var(--danger)' : 'var(--warning)'};border-radius:6px;padding:14px;margin-bottom:8px;">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+                <span class="badge ${f.severity === 'critical' ? 'badge-danger' : 'badge-warning'}">[${f.category}]</span>
+                <strong style="color:var(--text-main);font-size:14px;">${f.title}</strong>
+              </div>
+              <div style="font-size:13px;color:var(--text-muted);margin-bottom:8px;">${f.detail}</div>
+              <div style="font-size:12px;background:var(--bg-subtle);padding:8px 12px;border-radius:4px;color:#38bdf8;">
+                <strong>💡 SRE Action:</strong> ${f.recommendation}
+              </div>
+            </div>
+          `).join('');
+        })
+        .catch(err => {
+          body.innerHTML = `<div style="color:var(--danger);padding:10px;">Failed to fetch diagnosis: ${err.message}</div>`;
+        });
     }
 
     // Init

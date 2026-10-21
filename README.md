@@ -4,7 +4,7 @@
 [![Node.js 18+](https://img.shields.io/badge/node-%3E%3D18-green.svg)](https://nodejs.org/)
 [![Version](https://img.shields.io/badge/version-2.4.0-blue.svg)](https://github.com/AMG555/Safe-Load-Lab/releases)
 [![CI](https://github.com/AMG555/Safe-Load-Lab/actions/workflows/safe-load-lab.yml/badge.svg)](https://github.com/AMG555/Safe-Load-Lab/actions/workflows/safe-load-lab.yml)
-[![Tests: 124 Passing](https://img.shields.io/badge/tests-124%20passing-brightgreen.svg)](https://github.com/AMG555/Safe-Load-Lab)
+[![Tests: 125 Passing](https://img.shields.io/badge/tests-125%20passing-brightgreen.svg)](https://github.com/AMG555/Safe-Load-Lab)
 
 A production-ready, feature-rich CLI for **controlled load testing**, **autonomous capacity discovery**, **A/B differential benchmarking**, and **performance regression detection** of applications you own or have explicit permission to test.
 
@@ -20,7 +20,7 @@ This is **not** a DDoS tool. It is designed for safe capacity, performance, rate
 - 💥 **Chaos Engineering & Dynamic Mock Routes**: Hermetic mock server extended with `/chaos` (configurable failure rate & delay jitter), `/slow-stream` (chunked streaming), and runtime `/mock/routes` CRUD API.
 - 📑 **Zero-Dependency Executive HTML Reports**: Self-contained dark-mode report with embedded pure-SVG percentile progression curves and HDR histogram charts.
 - 🎨 **Visual Multi-Step Scenario Journey Flow Builder**: Interactive visual step sequence editor in Studio UI with response variable extraction and assertion chaining.
-- 🛡️ **124 Automated Quality Tests**: 100% passing test coverage across Unit, Integration, Performance, Smoke, A/B, UI Server, and QA suites.
+- 🛡️ **125 Automated Quality Tests**: 100% passing test coverage across Unit, Integration, Performance, Smoke, A/B, UI Server, and QA suites.
 
 ## 🎯 Why Safe Load Lab?
 

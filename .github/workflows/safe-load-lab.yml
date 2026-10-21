@@ -79,6 +79,13 @@ jobs:
       - name: Validate waveform configuration
         run: |
           sll validate --config examples/waveform-diurnal.json
+      - name: Run automated SRE bottleneck diagnosis on smoke test
+        run: |
+          sll diagnose reports/smoke-test.json
+      - name: Synthesize and validate OpenAPI CRUD Journey Flow
+        run: |
+          sll autogen-flow examples/petstore-openapi.json --out reports/petstore-journey.json
+          sll validate --config reports/petstore-journey.json
       - name: Upload reports
         uses: actions/upload-artifact@v4
         if: always()
