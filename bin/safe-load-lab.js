@@ -3397,6 +3397,9 @@ async function runAbTest(args) {
 }
 
 async function runCapacityTest(args) {
+  if (!args.url && args._ && args._[1] && (args._[1].startsWith('http://') || args._[1].startsWith('https://'))) {
+    args.url = args._[1];
+  }
   if (!args.url && !args.config && !args.curl) {
     throw new Error('capacity requires --url <url>, --config <file>, or --curl "<command>"');
   }
@@ -3406,7 +3409,7 @@ async function runCapacityTest(args) {
   const stepDuration = Number(args['step-duration'] || args.stepDuration || 5);
   const startRps = Math.max(5, Number(args['start-rps'] || args.startRps || 10));
   const maxCapRps = Math.min(Number(args['max-rps'] || args.maxRps || 200), HARD_LIMITS.maxRps);
-  const stepIncrement = Number(args['step-increment'] || args.stepIncrement || 0);
+  const stepIncrement = Number(args['step-increment'] || args.stepIncrement || args['step-inc'] || args.stepInc || 0);
   const concurrencyRatio = Number(args['concurrency-ratio'] || args.concurrencyRatio || 0.5);
 
   console.log(chalk.bold.cyan('\n============================================================'));
@@ -3886,6 +3889,7 @@ async function main() {
   }
   if (command === 'rate-limit') { await runRateLimitCheck(args); return; }
   if (command === 'capacity' || command === 'break') {
+    if (!args.url && args._[1]) args.url = args._[1];
     const capacityResult = await runCapacityTest(args);
     await saveCapacityReports(args, capacityResult);
     return;

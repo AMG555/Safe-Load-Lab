@@ -992,6 +992,27 @@ test('QA Executive HTML Report - writeHtmlReport renders SVG histogram and perce
   }
 });
 
+test('QA Capacity Engine - handles positional URL and step-inc argument', async () => {
+  const port = 4134;
+  const server = startMockServer(port, '127.0.0.1');
+  try {
+    const result = await runCapacityTest({
+      _: ['capacity', `http://127.0.0.1:${port}/fast`],
+      sla: 200,
+      'step-duration': 1,
+      'start-rps': 5,
+      'max-rps': 10,
+      'step-inc': 5,
+      'i-own-this-target': true
+    });
+    assert.equal(result.target, `http://127.0.0.1:${port}/fast`);
+    assert.ok(result.sweetSpotRps >= 5);
+  } finally {
+    server.close();
+  }
+});
+
+
 
 
 
