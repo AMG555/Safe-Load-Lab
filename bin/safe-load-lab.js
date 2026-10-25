@@ -348,13 +348,22 @@ function getByPath(obj, dottedPath) {
 }
 
 function setByPath(obj, dottedPath, value) {
+  if (!obj || typeof obj !== 'object' || !dottedPath) return;
   const parts = String(dottedPath).split('.');
+  for (const part of parts) {
+    if (part === '__proto__' || part === 'constructor' || part === 'prototype') {
+      return;
+    }
+  }
   let cur = obj;
   for (let i = 0; i < parts.length - 1; i++) {
-    cur[parts[i]] ||= {};
-    cur = cur[parts[i]];
+    const key = parts[i];
+    if (cur[key] == null || typeof cur[key] !== 'object') {
+      cur[key] = {};
+    }
+    cur = cur[key];
   }
-  cur[parts.at(-1)] = value;
+  cur[parts[parts.length - 1]] = value;
 }
 
 function loadEnvFile(filePath = '.env') {
@@ -421,7 +430,9 @@ function parseCsvData(content) {
     for (let j = 0; j < headers.length; j++) {
       let val = values[j] ?? '';
       if (val.startsWith('"') && val.endsWith('"')) val = val.slice(1, -1);
-      obj[headers[j]] = val;
+      const h = headers[j];
+      if (h === '__proto__' || h === 'constructor' || h === 'prototype') continue;
+      obj[h] = val;
     }
     rows.push(obj);
   }
@@ -443,13 +454,18 @@ function resolveDynamicGenerator(key) {
   }
   if (key.startsWith('$randomInt')) {
     const parts = key.split(':');
-    const min = parts[1] !== undefined ? parseInt(parts[1], 10) : 1;
-    const max = parts[2] !== undefined ? parseInt(parts[2], 10) : 1000;
+    let min = parts[1] !== undefined ? parseInt(parts[1], 10) : 1;
+    let max = parts[2] !== undefined ? parseInt(parts[2], 10) : 1000;
+    if (isNaN(min)) min = 1;
+    if (isNaN(max)) max = 1000;
+    if (min > max) [min, max] = [max, min];
     return String(Math.floor(Math.random() * (max - min + 1)) + min);
   }
   if (key.startsWith('$randomAlpha') || key.startsWith('$randomString')) {
     const parts = key.split(':');
-    const len = parts[1] !== undefined ? parseInt(parts[1], 10) : 8;
+    let len = parts[1] !== undefined ? parseInt(parts[1], 10) : 8;
+    if (isNaN(len) || len < 1) len = 8;
+    len = Math.min(len, 10000);
     const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     let str = '';
     for (let i = 0; i < len; i++) str += chars[Math.floor(Math.random() * chars.length)];
@@ -877,8 +893,12 @@ function renderTemplate(value, vars) {
 function mergeDeep(base, override) {
   const out = { ...(base || {}) };
   for (const [k, v] of Object.entries(override || {})) {
-    if (v && typeof v === 'object' && !Array.isArray(v) && out[k] && typeof out[k] === 'object' && !Array.isArray(out[k])) out[k] = mergeDeep(out[k], v);
-    else out[k] = v;
+    if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
+    if (v && typeof v === 'object' && !Array.isArray(v) && out[k] && typeof out[k] === 'object' && !Array.isArray(out[k])) {
+      out[k] = mergeDeep(out[k], v);
+    } else {
+      out[k] = v;
+    }
   }
   return out;
 }
@@ -1486,11 +1506,15 @@ function startMockServer(port = 8080, host = '127.0.0.1') {
     }
 
     if (pathname === '/slow') {
-      const delayMs = parseInt(parsedUrl.searchParams.get('delay') || '100', 10);
-      setTimeout(() => {
+      let delayMs = parseInt(parsedUrl.searchParams.get('delay') || '100', 10);
+      if (isNaN(delayMs) || delayMs < 0) delayMs = 100;
+      delayMs = Math.min(delayMs, 60000);
+      const timer = setTimeout(() => {
+        if (res.writableEnded) return;
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'ok', route: 'slow', delayedMs: delayMs, timestamp: Date.now() }));
       }, delayMs);
+      req.on('close', () => clearTimeout(timer));
       return;
     }
 
@@ -1526,10 +1550,23 @@ function startMockServer(port = 8080, host = '127.0.0.1') {
       return;
     }
 
+    const MAX_MOCK_BODY = 2 * 1024 * 1024; // 2MB safety limit
+
     if (pathname === '/echo') {
       let body = '';
-      req.on('data', chunk => { body += chunk; });
+      let bodyExceeded = false;
+      req.on('data', chunk => {
+        if (bodyExceeded) return;
+        body += chunk;
+        if (Buffer.byteLength(body) > MAX_MOCK_BODY) {
+          bodyExceeded = true;
+          res.writeHead(413, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Payload Too Large', maxBytes: MAX_MOCK_BODY }));
+          req.destroy();
+        }
+      });
       req.on('end', () => {
+        if (bodyExceeded) return;
         let parsed = null;
         try { parsed = JSON.parse(body); } catch { parsed = body; }
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1575,8 +1612,19 @@ function startMockServer(port = 8080, host = '127.0.0.1') {
       }
       if (req.method === 'POST') {
         let body = '';
-        req.on('data', chunk => { body += chunk; });
+        let bodyExceeded = false;
+        req.on('data', chunk => {
+          if (bodyExceeded) return;
+          body += chunk;
+          if (Buffer.byteLength(body) > MAX_MOCK_BODY) {
+            bodyExceeded = true;
+            res.writeHead(413, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Payload Too Large', maxBytes: MAX_MOCK_BODY }));
+            req.destroy();
+          }
+        });
         req.on('end', () => {
+          if (bodyExceeded) return;
           let parsed = {};
           try { parsed = JSON.parse(body); } catch {}
           const newItem = { id: mockItems.length + 1, ...parsed, createdAt: new Date().toISOString() };
@@ -1601,13 +1649,20 @@ function startMockServer(port = 8080, host = '127.0.0.1') {
     }
 
     if (pathname === '/chaos') {
-      const failRate = parseFloat(parsedUrl.searchParams.get('failRate') || '0.25');
-      const minDelay = parseInt(parsedUrl.searchParams.get('minDelay') || '20', 10);
-      const maxDelay = parseInt(parsedUrl.searchParams.get('maxDelay') || '150', 10);
-      const status = parseInt(parsedUrl.searchParams.get('status') || '500', 10);
+      let failRate = parseFloat(parsedUrl.searchParams.get('failRate') || '0.25');
+      if (isNaN(failRate) || failRate < 0) failRate = 0.25;
+      let minDelay = parseInt(parsedUrl.searchParams.get('minDelay') || '20', 10);
+      let maxDelay = parseInt(parsedUrl.searchParams.get('maxDelay') || '150', 10);
+      if (isNaN(minDelay) || minDelay < 0) minDelay = 20;
+      if (isNaN(maxDelay) || maxDelay < minDelay) maxDelay = Math.max(minDelay, 150);
+      minDelay = Math.min(minDelay, 30000);
+      maxDelay = Math.min(maxDelay, 60000);
+      let status = parseInt(parsedUrl.searchParams.get('status') || '500', 10);
+      if (isNaN(status) || status < 100 || status > 599) status = 500;
       const delay = Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
 
-      setTimeout(() => {
+      const timer = setTimeout(() => {
+        if (res.writableEnded) return;
         if (Math.random() < failRate) {
           res.writeHead(status, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Chaos Injected Failure', status, delayMs: delay }));
@@ -1616,18 +1671,28 @@ function startMockServer(port = 8080, host = '127.0.0.1') {
           res.end(JSON.stringify({ status: 'ok', route: 'chaos', delayMs: delay }));
         }
       }, delay);
+      req.on('close', () => clearTimeout(timer));
       return;
     }
 
     if (pathname === '/slow-stream') {
-      const chunks = parseInt(parsedUrl.searchParams.get('chunks') || '5', 10);
-      const delay = parseInt(parsedUrl.searchParams.get('delay') || '30', 10);
+      let chunks = parseInt(parsedUrl.searchParams.get('chunks') || '5', 10);
+      let delay = parseInt(parsedUrl.searchParams.get('delay') || '30', 10);
+      if (isNaN(chunks) || chunks < 1) chunks = 5;
+      chunks = Math.min(chunks, 1000);
+      if (isNaN(delay) || delay < 1) delay = 30;
+      delay = Math.min(delay, 10000);
+
       res.writeHead(200, {
         'Content-Type': 'application/x-ndjson; charset=utf-8',
         'Transfer-Encoding': 'chunked'
       });
       let chunkCount = 0;
       const timer = setInterval(() => {
+        if (res.writableEnded) {
+          clearInterval(timer);
+          return;
+        }
         chunkCount++;
         res.write(JSON.stringify({ chunk: chunkCount, total: chunks, time: Date.now() }) + '\n');
         if (chunkCount >= chunks) {
@@ -1635,6 +1700,7 @@ function startMockServer(port = 8080, host = '127.0.0.1') {
           res.end();
         }
       }, delay);
+      req.on('close', () => clearInterval(timer));
       return;
     }
 
@@ -1647,8 +1713,19 @@ function startMockServer(port = 8080, host = '127.0.0.1') {
       }
       if (req.method === 'POST') {
         let body = '';
-        req.on('data', chunk => { body += chunk; });
+        let bodyExceeded = false;
+        req.on('data', chunk => {
+          if (bodyExceeded) return;
+          body += chunk;
+          if (Buffer.byteLength(body) > MAX_MOCK_BODY) {
+            bodyExceeded = true;
+            res.writeHead(413, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Payload Too Large', maxBytes: MAX_MOCK_BODY }));
+            req.destroy();
+          }
+        });
         req.on('end', () => {
+          if (bodyExceeded) return;
           try {
             const data = JSON.parse(body);
             if (!data.path) {
@@ -2237,8 +2314,9 @@ function evaluateAssertions(result, assertions = []) {
           break;
         }
 
-        case 'header':
-          const headerValue = result.headers?.[assertion.name.toLowerCase()];
+        case 'header': {
+          const headerName = String(assertion.name || '').toLowerCase();
+          const headerValue = headerName ? result.headers?.[headerName] : undefined;
           assertionResult.actual = headerValue;
           
           if (assertion.equals !== undefined) {
@@ -2255,6 +2333,7 @@ function evaluateAssertions(result, assertions = []) {
               : `Expected to contain "${assertion.contains}", got ${headerValue}`;
           }
           break;
+        }
           
         case 'responseTime':
           assertionResult.actual = result.durationMs;
@@ -2494,7 +2573,8 @@ async function runTest(config) {
     });
   }
   
-  process.on('SIGINT', () => { stopped = true; if (progressBar) progressBar.stop(); console.log(chalk.yellow('\n⚠️  Stopping gracefully...')); });
+  const onSigInt = () => { stopped = true; if (progressBar) progressBar.stop(); console.log(chalk.yellow('\n⚠️  Stopping gracefully...')); };
+  process.on('SIGINT', onSigInt);
   let lastProgress = Date.now();
   let lastLaunch = Date.now();
   let requestCounter = 0;
@@ -2607,6 +2687,7 @@ async function runTest(config) {
   
   // Wait for in-flight requests
   while (active > 0) await new Promise(resolve => setTimeout(resolve, 50));
+  process.removeListener('SIGINT', onSigInt);
   const finishedAt = Date.now();
   console.log(chalk.bold.green('\n✓ Test finished.'));
   const summary = summarize(results, startedAt, finishedAt, config);
@@ -2892,14 +2973,14 @@ function writeHtmlReport(filePath, summary, results) {
       <div class="chart-card">
         <div class="chart-title">
           <span>📈 Latency Percentile Progression</span>
-          <span style="font-size:11px;color:var(--text-muted);font-family:var(--font-mono);">Avg: ${summary.latencyMs.avg.toFixed(1)}ms</span>
+          <span style="font-size:11px;color:var(--text-muted);font-family:var(--font-mono);">Avg: ${(summary.latencyMs?.avg ?? 0).toFixed(1)}ms</span>
         </div>
         ${percentileSvg}
       </div>
       <div class="chart-card">
         <div class="chart-title">
           <span>📊 Latency HDR Histogram Distribution</span>
-          <span style="font-size:11px;color:var(--text-muted);font-family:var(--font-mono);">p99: ${summary.latencyMs.p99.toFixed(1)}ms</span>
+          <span style="font-size:11px;color:var(--text-muted);font-family:var(--font-mono);">p99: ${(summary.latencyMs?.p99 ?? 0).toFixed(1)}ms</span>
         </div>
         ${distributionSvg}
       </div>
@@ -3007,24 +3088,24 @@ function generateMarkdownReport(summary) {
 
 | Percentile | Value |
 |------------|-------|
-| Average | ${summary.latencyMs.avg.toFixed(2)}ms |
-| Median (p50) | ${summary.latencyMs.p50.toFixed(2)}ms |
-| p90 | ${summary.latencyMs.p90.toFixed(2)}ms |
-| p95 | ${summary.latencyMs.p95.toFixed(2)}ms |
-| p99 | ${summary.latencyMs.p99.toFixed(2)}ms |
-| Min | ${summary.latencyMs.min.toFixed(2)}ms |
-| Max | ${summary.latencyMs.max.toFixed(2)}ms |
+| Average | ${(summary.latencyMs?.avg ?? 0).toFixed(2)}ms |
+| Median (p50) | ${(summary.latencyMs?.p50 ?? 0).toFixed(2)}ms |
+| p90 | ${(summary.latencyMs?.p90 ?? 0).toFixed(2)}ms |
+| p95 | ${(summary.latencyMs?.p95 ?? 0).toFixed(2)}ms |
+| p99 | ${(summary.latencyMs?.p99 ?? 0).toFixed(2)}ms |
+| Min | ${(summary.latencyMs?.min ?? 0).toFixed(2)}ms |
+| Max | ${(summary.latencyMs?.max ?? 0).toFixed(2)}ms |
 | Distribution | \`${summary.latencySparkline || 'N/A'}\` |
 
 ## Status Distribution
 
 | Status Code | Count |
 |-------------|-------|
-${Object.entries(summary.byStatus).map(([status, count]) => `| ${status} | ${count} |`).join('\n')}
+${Object.entries(summary.byStatus || {}).map(([status, count]) => `| ${status} | ${count} |`).join('\n')}
 
 ## Endpoints
 
-${Object.entries(summary.byEndpoint).map(([name, stats]) => `
+${Object.entries(summary.byEndpoint || {}).map(([name, stats]) => `
 ### ${name}
 
 - **Total Requests**: ${stats.total}
@@ -3389,23 +3470,24 @@ function compareReports(file1Path, file2Path, options = {}) {
 async function sendWebhook(url, summary) {
   try {
     const payload = {
-      testName: summary.testName,
-      timestamp: summary.finishedAt,
-      requests: summary.totals.requests,
-      failed: summary.totals.failed,
-      errorRate: summary.totals.errorRate,
-      rps: summary.totals.achievedRps,
+      testName: summary.testName || 'load-test',
+      timestamp: summary.finishedAt || new Date().toISOString(),
+      requests: summary.totals?.requests || 0,
+      failed: summary.totals?.failed || 0,
+      errorRate: summary.totals?.errorRate || 0,
+      rps: summary.totals?.achievedRps || 0,
       latency: {
-        avg: summary.latencyMs.avg,
-        p95: summary.latencyMs.p95,
-        p99: summary.latencyMs.p99
+        avg: summary.latencyMs?.avg || 0,
+        p95: summary.latencyMs?.p95 || 0,
+        p99: summary.latencyMs?.p99 || 0
       },
-      thresholds: summary.thresholds
+      thresholds: summary.thresholds || {}
     };
     await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(5000)
     });
     console.log(`✅ Webhook sent to ${url}`);
   } catch (err) {
@@ -3423,24 +3505,25 @@ async function sendSlackNotification(webhookUrl, summary) {
     const message = {
       attachments: [{
         color,
-        title: `${emoji} Load Test: ${summary.testName}`,
+        title: `${emoji} Load Test: ${summary.testName || 'load-test'}`,
         fields: [
-          { title: 'Requests', value: summary.totals.requests.toString(), short: true },
-          { title: 'Failed', value: summary.totals.failed.toString(), short: true },
-          { title: 'Error Rate', value: `${(summary.totals.errorRate * 100).toFixed(2)}%`, short: true },
-          { title: 'RPS', value: summary.totals.achievedRps.toFixed(2), short: true },
-          { title: 'Avg Latency', value: `${summary.latencyMs.avg.toFixed(2)}ms`, short: true },
-          { title: 'p95 Latency', value: `${summary.latencyMs.p95.toFixed(2)}ms`, short: true }
+          { title: 'Requests', value: String(summary.totals?.requests || 0), short: true },
+          { title: 'Failed', value: String(summary.totals?.failed || 0), short: true },
+          { title: 'Error Rate', value: `${((summary.totals?.errorRate || 0) * 100).toFixed(2)}%`, short: true },
+          { title: 'RPS', value: (summary.totals?.achievedRps || 0).toFixed(2), short: true },
+          { title: 'Avg Latency', value: `${(summary.latencyMs?.avg || 0).toFixed(2)}ms`, short: true },
+          { title: 'p95 Latency', value: `${(summary.latencyMs?.p95 || 0).toFixed(2)}ms`, short: true }
         ],
         footer: 'Safe Load Lab',
-        ts: Math.floor(new Date(summary.finishedAt).getTime() / 1000)
+        ts: Math.floor(new Date(summary.finishedAt || Date.now()).getTime() / 1000)
       }]
     };
     
     await fetch(webhookUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(message)
+      body: JSON.stringify(message),
+      signal: AbortSignal.timeout(5000)
     });
     console.log('✅ Slack notification sent');
   } catch (err) {
@@ -3535,10 +3618,10 @@ function computeAbDiff(summaryA, summaryB, options = {}) {
     return { a, b, diff, pct };
   };
 
-  const reqDelta = summaryB.totals.requests - summaryA.totals.requests;
-  const rpsDelta = summaryB.totals.achievedRps - summaryA.totals.achievedRps;
-  const errorRateA = summaryA.totals.errorRate * 100;
-  const errorRateB = summaryB.totals.errorRate * 100;
+  const reqDelta = (summaryB.totals?.requests || 0) - (summaryA.totals?.requests || 0);
+  const rpsDelta = (summaryB.totals?.achievedRps || 0) - (summaryA.totals?.achievedRps || 0);
+  const errorRateA = (summaryA.totals?.errorRate || 0) * 100;
+  const errorRateB = (summaryB.totals?.errorRate || 0) * 100;
   const errorRateDiff = errorRateB - errorRateA;
 
   const latencies = {
@@ -3883,13 +3966,13 @@ async function runCapacityTest(args) {
 
     const { summary } = await runTest(stepConfig);
 
-    const achievedRps = summary.totals.achievedRps;
-    const errorRate = summary.totals.errorRate;
-    const avgMs = summary.latencyMs.avg;
-    const p95Ms = summary.latencyMs.p95;
-    const p99Ms = summary.latencyMs.p99;
-    const failed = summary.totals.failed;
-    const total = summary.totals.requests;
+    const achievedRps = summary.totals?.achievedRps ?? 0;
+    const errorRate = summary.totals?.errorRate ?? 0;
+    const avgMs = summary.latencyMs?.avg ?? 0;
+    const p95Ms = summary.latencyMs?.p95 ?? 0;
+    const p99Ms = summary.latencyMs?.p99 ?? 0;
+    const failed = summary.totals?.failed ?? 0;
+    const total = summary.totals?.requests ?? 0;
 
     let slope = 0;
     if (i > 0 && achievedRps > matrix[i - 1].achievedRps) {
@@ -4496,6 +4579,7 @@ export {
   percentile,
   getByPath,
   setByPath,
+  mergeDeep,
   renderTemplate,
   pickEndpoint,
   evaluateAssertions,

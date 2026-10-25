@@ -1436,6 +1436,16 @@
   </main>
 
   <script>
+    function escapeHtml(str) {
+      if (str === null || str === undefined) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
     // Global State
     let latencyChartInstance = null;
     let abChartInstance = null;
@@ -1537,8 +1547,8 @@
       const div = document.createElement('div');
       div.className = 'header-row';
       div.innerHTML = `
-        <input type="text" placeholder="Header Name (e.g. Accept)" value="${key}" style="flex:1;" class="hdr-key">
-        <input type="text" placeholder="Header Value" value="${val}" style="flex:1;" class="hdr-val">
+        <input type="text" placeholder="Header Name (e.g. Accept)" value="${escapeHtml(key)}" style="flex:1;" class="hdr-key">
+        <input type="text" placeholder="Header Value" value="${escapeHtml(val)}" style="flex:1;" class="hdr-val">
         <button type="button" class="btn btn-danger btn-sm" onclick="this.parentElement.remove()">✕</button>
       `;
       container.appendChild(div);
@@ -1621,7 +1631,7 @@
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
             <div style="display:flex;align-items:center;gap:6px;">
               <span class="badge badge-neutral" style="font-size:10px;">Step ${idx + 1}</span>
-              <input type="text" value="${step.name || ''}" placeholder="Step Name" style="width:160px;padding:3px 6px;font-size:12px;font-weight:600;" onchange="updateScenarioStep(${idx}, 'name', this.value)">
+              <input type="text" value="${escapeHtml(step.name || '')}" placeholder="Step Name" style="width:160px;padding:3px 6px;font-size:12px;font-weight:600;" onchange="updateScenarioStep(${idx}, 'name', this.value)">
             </div>
             <button type="button" class="btn btn-danger btn-sm" style="padding:2px 6px;font-size:11px;" onclick="removeScenarioStep(${idx})">✕ Remove</button>
           </div>
@@ -1632,16 +1642,16 @@
               <option value="PUT" ${step.method === 'PUT' ? 'selected' : ''}>PUT</option>
               <option value="DELETE" ${step.method === 'DELETE' ? 'selected' : ''}>DELETE</option>
             </select>
-            <input type="url" value="${step.url || ''}" placeholder="http://127.0.0.1:8080/path" style="flex:1;padding:4px 8px;font-size:12px;" onchange="updateScenarioStep(${idx}, 'url', this.value)">
+            <input type="url" value="${escapeHtml(step.url || '')}" placeholder="http://127.0.0.1:8080/path" style="flex:1;padding:4px 8px;font-size:12px;" onchange="updateScenarioStep(${idx}, 'url', this.value)">
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
             <div>
               <label style="font-size:10px;margin-bottom:2px;">Extract Variable</label>
-              <input type="text" value="${step.extract || ''}" placeholder="token=body.token" style="padding:3px 6px;font-size:11px;font-family:var(--font-mono);" onchange="updateScenarioStep(${idx}, 'extract', this.value)">
+              <input type="text" value="${escapeHtml(step.extract || '')}" placeholder="token=body.token" style="padding:3px 6px;font-size:11px;font-family:var(--font-mono);" onchange="updateScenarioStep(${idx}, 'extract', this.value)">
             </div>
             <div>
               <label style="font-size:10px;margin-bottom:2px;">Assertion Check</label>
-              <input type="text" value="${step.assertion || ''}" placeholder="status == 200" style="padding:3px 6px;font-size:11px;font-family:var(--font-mono);" onchange="updateScenarioStep(${idx}, 'assertion', this.value)">
+              <input type="text" value="${escapeHtml(step.assertion || '')}" placeholder="status == 200" style="padding:3px 6px;font-size:11px;font-family:var(--font-mono);" onchange="updateScenarioStep(${idx}, 'assertion', this.value)">
             </div>
           </div>
         </div>
@@ -2145,9 +2155,9 @@
 
           const samples = (eb.samples || []).map(s => 
             `<div style="background:var(--bg-canvas);padding:6px 10px;border-radius:4px;border:1px solid var(--border-subtle);font-family:var(--font-mono);font-size:11px;">
-              <span style="color:var(--danger);font-weight:700;">${s.status ? 'HTTP ' + s.status : 'ERR'}</span> 
-              <span style="color:var(--accent);">${s.method || 'GET'} ${s.endpoint || s.url}</span> 
-              <span style="color:var(--text-dim);">(${s.durationMs}ms)</span> — <span style="color:var(--text-muted);">${s.error || 'Failed'}</span>
+              <span style="color:var(--danger);font-weight:700;">${s.status ? 'HTTP ' + escapeHtml(s.status) : 'ERR'}</span> 
+              <span style="color:var(--accent);">${escapeHtml(s.method || 'GET')} ${escapeHtml(s.endpoint || s.url)}</span> 
+              <span style="color:var(--text-dim);">(${Number(s.durationMs) || 0}ms)</span> — <span style="color:var(--text-muted);">${escapeHtml(s.error || 'Failed')}</span>
             </div>`
           );
           document.getElementById('failureSamplesList').innerHTML = samples.join('') || '<div class="muted">No sample details</div>';
@@ -2184,7 +2194,8 @@
         } else {
           parsedCsvRows = res.rows;
           summaryEl.style.display = 'block';
-          summaryEl.innerHTML = `✓ Parsed <b>${res.count} rows</b> with columns: <code>${res.headers.map(h => '{{data.' + h + '}}').join(', ')}</code>`;
+          const safeCols = (res.headers || []).map(h => '{{data.' + escapeHtml(h) + '}}').join(', ');
+          summaryEl.innerHTML = `✓ Parsed <b>${Number(res.count) || 0} rows</b> with columns: <code>${safeCols}</code>`;
         }
       })
       .catch(err => alert('Failed to parse CSV: ' + err.message));
@@ -2250,7 +2261,7 @@
       const headers = res.headers || {};
       const hdrEntries = Object.entries(headers);
       if (hdrEntries.length) {
-        hdrDiv.innerHTML = hdrEntries.map(([k, v]) => `<div><span style="color:var(--text-main);">${k}:</span> ${v}</div>`).join('');
+        hdrDiv.innerHTML = hdrEntries.map(([k, v]) => `<div><span style="color:var(--text-main);">${escapeHtml(k)}:</span> ${escapeHtml(v)}</div>`).join('');
       } else {
         hdrDiv.textContent = '(no headers)';
       }
@@ -2271,10 +2282,12 @@
         assertBox.style.display = 'block';
         assertList.innerHTML = res.assertions.map(a => 
           `<div style="font-family:var(--font-mono);font-size:11px;color:${a.passed ? 'var(--success)' : 'var(--danger)'};">
-            ${a.passed ? '✓' : '✗'} <b>${a.type}</b>: ${a.message}
+            ${a.passed ? '✓' : '✗'} <b>${escapeHtml(a.type)}</b>: ${escapeHtml(a.message)}
           </div>`
         ).join('');
       } else {
+        assertBox.style.display = 'none';
+      }
         assertBox.style.display = 'none';
       }
 
@@ -2757,23 +2770,31 @@
           
           quickSelect.innerHTML = '<option value="">Load Preset...</option>';
           configs.forEach(c => {
-            quickSelect.innerHTML += `<option value="${c.filename}">${c.name || c.filename}</option>`;
+            const opt = document.createElement('option');
+            opt.value = c.filename;
+            opt.textContent = c.name || c.filename;
+            quickSelect.appendChild(opt);
           });
 
-          container.innerHTML = configs.map(c => `
-            <div class="preset-card" onclick="applyPresetToWorkbench('${c.filename}')">
+          container.innerHTML = configs.map(c => {
+            const safeFile = escapeHtml(c.filename);
+            const safeName = escapeHtml(c.name || c.filename);
+            const encFile = encodeURIComponent(c.filename);
+            return `
+            <div class="preset-card" onclick="applyPresetToWorkbench('${encFile}')">
               <div class="preset-title">
-                <span>${c.name || c.filename}</span>
-                <span class="badge badge-neutral">${c.filename}</span>
+                <span>${safeName}</span>
+                <span class="badge badge-neutral">${safeFile}</span>
               </div>
               <div class="preset-desc">Ready configuration for controlled load testing. Click to load into Workbench.</div>
               <div class="preset-meta">
-                ${c.duration ? `<span>⏱ ${c.duration}s</span>` : ''}
-                ${c.concurrency ? `<span>👥 ${c.concurrency}c</span>` : ''}
-                ${c.rps ? `<span>⚡ ${c.rps} RPS</span>` : ''}
+                ${c.duration ? `<span>⏱ ${Number(c.duration)}s</span>` : ''}
+                ${c.concurrency ? `<span>👥 ${Number(c.concurrency)}c</span>` : ''}
+                ${c.rps ? `<span>⚡ ${Number(c.rps)} RPS</span>` : ''}
               </div>
             </div>
-          `).join('');
+          `;
+          }).join('');
         });
     }
 
@@ -2940,22 +2961,24 @@
       }
 
       container.innerHTML = reports.map(r => {
-        const dateStr = new Date(r.date).toLocaleString();
-        const kb = Math.round((r.sizeBytes || 0) / 1024);
+        const dateStr = escapeHtml(new Date(r.date).toLocaleString());
+        const kb = Math.round((Number(r.sizeBytes) || 0) / 1024);
         const typeBadge = r.isAb ? '<span class="badge badge-warning">A/B Benchmark</span>' : '<span class="badge badge-success">Load Test</span>';
+        const safeName = escapeHtml(r.name);
+        const encName = encodeURIComponent(r.name);
         
         let statsSnippet = '';
         if (r.preview?.type === 'load' && r.preview.requests) {
-          statsSnippet = `<span style="font-family:var(--font-mono);font-size:11px;color:var(--text-muted);">${r.preview.requests} reqs | ${r.preview.rps?.toFixed(1)} rps | p95: ${r.preview.p95?.toFixed(1)}ms</span>`;
+          statsSnippet = `<span style="font-family:var(--font-mono);font-size:11px;color:var(--text-muted);">${Number(r.preview.requests)} reqs | ${(Number(r.preview.rps) || 0).toFixed(1)} rps | p95: ${(Number(r.preview.p95) || 0).toFixed(1)}ms</span>`;
         } else if (r.preview?.type === 'ab') {
-          statsSnippet = `<span style="font-family:var(--font-mono);font-size:11px;color:var(--text-muted);">Winner: ${r.preview.winner} | p95 delta: ${r.preview.pctDelta > 0 ? '+' : ''}${r.preview.pctDelta?.toFixed(1)}%</span>`;
+          statsSnippet = `<span style="font-family:var(--font-mono);font-size:11px;color:var(--text-muted);">Winner: ${escapeHtml(r.preview.winner)} | p95 delta: ${(Number(r.preview.pctDelta) || 0) > 0 ? '+' : ''}${(Number(r.preview.pctDelta) || 0).toFixed(1)}%</span>`;
         }
 
         return `
           <div class="history-card">
             <div style="flex:1;min-width:0;">
               <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
-                <strong style="color:var(--text-main);font-size:14px;cursor:pointer;" onclick="inspectReport('${r.name}')">${r.name}</strong>
+                <strong style="color:var(--text-main);font-size:14px;cursor:pointer;" onclick="inspectReport('${encName}')">${safeName}</strong>
                 ${typeBadge}
               </div>
               <div style="display:flex;align-items:center;gap:12px;font-size:12px;color:var(--text-dim);">
@@ -2965,13 +2988,13 @@
               </div>
             </div>
             <div style="display:flex;gap:6px;flex-wrap:wrap;">
-              <a href="/api/reports/${r.name}/html" target="_blank" class="btn btn-secondary btn-sm">HTML</a>
-              <button class="btn btn-secondary btn-sm" onclick="viewDiagnosisModal('${r.name}')" title="SRE Diagnosis">🏥 Diagnosis</button>
-              <a href="/api/reports/${r.name}/csv" class="btn btn-secondary btn-sm">CSV</a>
-              <a href="/api/reports/${r.name}/markdown" target="_blank" class="btn btn-secondary btn-sm">MD</a>
-              <a href="/api/reports/${r.name}/prometheus" target="_blank" class="btn btn-secondary btn-sm">Prometheus</a>
-              <a href="/api/reports/${r.name}/badge" target="_blank" class="btn btn-secondary btn-sm">Badge</a>
-              <button class="btn btn-danger btn-sm" onclick="deleteReport('${r.name}')">✕</button>
+              <a href="/api/reports/${encName}/html" target="_blank" class="btn btn-secondary btn-sm">HTML</a>
+              <button class="btn btn-secondary btn-sm" onclick="viewDiagnosisModal('${encName}')" title="SRE Diagnosis">🏥 Diagnosis</button>
+              <a href="/api/reports/${encName}/csv" class="btn btn-secondary btn-sm">CSV</a>
+              <a href="/api/reports/${encName}/markdown" target="_blank" class="btn btn-secondary btn-sm">MD</a>
+              <a href="/api/reports/${encName}/prometheus" target="_blank" class="btn btn-secondary btn-sm">Prometheus</a>
+              <a href="/api/reports/${encName}/badge" target="_blank" class="btn btn-secondary btn-sm">Badge</a>
+              <button class="btn btn-danger btn-sm" onclick="deleteReport('${encName}')">✕</button>
             </div>
           </div>
         `;
@@ -3065,10 +3088,10 @@
         .then(r => r.json())
         .then(diag => {
           if (diag.error) {
-            body.innerHTML = `<div style="color:var(--danger);padding:10px;">Error: ${diag.error}</div>`;
+            body.innerHTML = `<div style="color:var(--danger);padding:10px;">Error: ${escapeHtml(diag.error)}</div>`;
             return;
           }
-          const score = diag.healthScore ?? 100;
+          const score = Number(diag.healthScore) || 100;
           const scoreColor = score >= 85 ? 'var(--success)' : score >= 60 ? 'var(--warning)' : 'var(--danger)';
           badge.textContent = `Health Score: ${score}/100`;
           badge.style.color = scoreColor;
@@ -3083,21 +3106,24 @@
             return;
           }
 
-          body.innerHTML = diag.findings.map(f => `
-            <div style="background:var(--bg-canvas);border:1px solid var(--border-default);border-left:4px solid ${f.severity === 'critical' ? 'var(--danger)' : 'var(--warning)'};border-radius:6px;padding:14px;margin-bottom:8px;">
+          body.innerHTML = diag.findings.map(f => {
+            const isCrit = f.severity === 'critical';
+            return `
+            <div style="background:var(--bg-canvas);border:1px solid var(--border-default);border-left:4px solid ${isCrit ? 'var(--danger)' : 'var(--warning)'};border-radius:6px;padding:14px;margin-bottom:8px;">
               <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
-                <span class="badge ${f.severity === 'critical' ? 'badge-danger' : 'badge-warning'}">[${f.category}]</span>
-                <strong style="color:var(--text-main);font-size:14px;">${f.title}</strong>
+                <span class="badge ${isCrit ? 'badge-danger' : 'badge-warning'}">[${escapeHtml(f.category)}]</span>
+                <strong style="color:var(--text-main);font-size:14px;">${escapeHtml(f.title)}</strong>
               </div>
-              <div style="font-size:13px;color:var(--text-muted);margin-bottom:8px;">${f.detail}</div>
+              <div style="font-size:13px;color:var(--text-muted);margin-bottom:8px;">${escapeHtml(f.detail)}</div>
               <div style="font-size:12px;background:var(--bg-subtle);padding:8px 12px;border-radius:4px;color:#38bdf8;">
-                <strong>💡 SRE Action:</strong> ${f.recommendation}
+                <strong>💡 SRE Action:</strong> ${escapeHtml(f.recommendation)}
               </div>
             </div>
-          `).join('');
+          `;
+          }).join('');
         })
         .catch(err => {
-          body.innerHTML = `<div style="color:var(--danger);padding:10px;">Failed to fetch diagnosis: ${err.message}</div>`;
+          body.innerHTML = `<div style="color:var(--danger);padding:10px;">Failed to fetch diagnosis: ${escapeHtml(err.message)}</div>`;
         });
     }
 

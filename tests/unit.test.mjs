@@ -6,6 +6,9 @@ import {
   calculatePercentiles,
   getByPath,
   setByPath,
+  mergeDeep,
+  parseCsvData,
+  resolveDynamicGenerator,
   renderTemplate,
   pickEndpoint
 } from '../bin/safe-load-lab.js';
@@ -187,4 +190,46 @@ test('memory efficiency - large result set handling', () => {
   
   assert.ok(memUsedMB < 50, `Memory usage too high: ${memUsedMB.toFixed(2)}MB for 10k results`);
   assert.equal(results.length, 10000);
+});
+
+test('setByPath - prototype pollution protection', () => {
+  const target = {};
+  setByPath(target, '__proto__.polluted', 'yes');
+  setByPath(target, 'constructor.prototype.polluted', 'yes');
+  setByPath(target, 'prototype.polluted', 'yes');
+  
+  assert.equal({}.polluted, undefined, 'Object prototype must not be polluted');
+  assert.equal(target.polluted, undefined);
+});
+
+test('mergeDeep - prototype pollution protection', () => {
+  const target = {};
+  const malicious = JSON.parse('{"__proto__": {"admin": true}, "constructor": {"prototype": {"admin": true}}}');
+  mergeDeep(target, malicious);
+
+  assert.equal({}.admin, undefined, 'Object prototype must not be polluted by mergeDeep');
+  assert.equal(target.admin, undefined);
+});
+
+test('parseCsvData - prototype pollution protection', () => {
+  const csv = '__proto__,name,age\nadmin=true,Alice,30\n';
+  const rows = parseCsvData(csv);
+  assert.equal(rows.length, 1);
+  assert.equal({}.admin, undefined, 'Object prototype must not be polluted by parseCsvData');
+  assert.equal(rows[0].name, 'Alice');
+  assert.equal(rows[0].age, '30');
+});
+
+test('resolveDynamicGenerator - boundary checks and length limits', () => {
+  const hugeString = resolveDynamicGenerator('$randomString:50000');
+  assert.ok(hugeString.length <= 10000, 'Length must be clamped to max 10000');
+
+  const validString = resolveDynamicGenerator('$randomString:16');
+  assert.equal(validString.length, 16);
+
+  const boundedInt = parseInt(resolveDynamicGenerator('$randomInt:50:100'), 10);
+  assert.ok(boundedInt >= 50 && boundedInt <= 100);
+
+  const invertedInt = parseInt(resolveDynamicGenerator('$randomInt:100:50'), 10);
+  assert.ok(invertedInt >= 50 && invertedInt <= 100, 'Inverted min/max must swap correctly');
 });

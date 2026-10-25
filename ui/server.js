@@ -24,9 +24,18 @@ const CLI_PATH = path.join(__dirname, '..', 'bin', 'safe-load-lab.js');
 const urlModule = require('url');
 const toFileUrl = urlModule.pathToFileURL || ((p) => new URL(`file:///${path.resolve(p).replace(/\\/g, '/')}`));
 let sll = null;
-import(toFileUrl(CLI_PATH).href).then(m => { sll = m; }).catch(err => {
+const sllPromise = import(toFileUrl(CLI_PATH).href).then(m => {
+  sll = m;
+  return m;
+}).catch(err => {
   console.error('Failed to import CLI helpers:', err.message);
+  return null;
 });
+
+async function getSll() {
+  if (sll) return sll;
+  return sllPromise;
+}
 
 let mockServerInstance = null;
 let mockProcess = null;
@@ -50,7 +59,8 @@ function createTempConfig(config) {
 
 // Helper: safe report name
 function sanitizeName(name) {
-  return String(name || 'result').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const sanitized = String(name || 'result').replace(/[^a-zA-Z0-9_-]/g, '_');
+  return sanitized.replace(/^_+/, '') || 'result';
 }
 
 // System status
@@ -95,10 +105,14 @@ app.get('/api/configs', (req, res) => {
 // Get config details
 app.get('/api/configs/:name', (req, res) => {
   const safeName = path.basename(req.params.name);
-  if (!safeName.endsWith('.json')) {
+  if (!safeName.endsWith('.json') || safeName.includes('..')) {
     return res.status(400).json({ error: 'Config file must end with .json' });
   }
-  const configPath = path.join(__dirname, '..', 'examples', safeName);
+  const examplesRoot = path.resolve(__dirname, '..', 'examples');
+  const configPath = path.resolve(examplesRoot, safeName);
+  if (!configPath.startsWith(examplesRoot + path.sep)) {
+    return res.status(400).json({ error: 'Invalid config path' });
+  }
   try {
     if (!fs.existsSync(configPath)) {
       return res.status(404).json({ error: 'Config not found' });
@@ -424,27 +438,29 @@ app.delete('/api/mock/routes', (req, res) => {
 });
 
 // Waveform stages preview
-app.post('/api/waveform', (req, res) => {
+app.post('/api/waveform', async (req, res) => {
   const opts = req.body.options || req.body || {};
   const waveform = req.body.waveform || opts.waveform || 'constant';
   try {
-    if (!sll) return res.status(503).json({ error: 'Engine helper initializing' });
-    const stages = sll.generateTrafficProfile(waveform, opts);
+    const engine = await getSll();
+    if (!engine) return res.status(503).json({ error: 'Engine helper initializing' });
+    const stages = engine.generateTrafficProfile(waveform, opts);
     res.json({ waveform, stages });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
 
-app.post('/api/mock/start', (req, res) => {
+app.post('/api/mock/start', async (req, res) => {
   if (mockServerInstance || mockProcess) {
     return res.json({ running: true, port: mockPort, message: 'Mock server already running' });
   }
 
   mockPort = req.body.port ? parseInt(req.body.port, 10) : 8080;
-  if (sll && sll.startMockServer) {
+  const engine = await getSll();
+  if (engine && engine.startMockServer) {
     try {
-      mockServerInstance = sll.startMockServer(mockPort, '127.0.0.1');
+      mockServerInstance = engine.startMockServer(mockPort, '127.0.0.1');
       mockServerInstance.on('error', () => {
         mockServerInstance = null;
       });
@@ -580,7 +596,7 @@ app.get('/api/reports/:name/markdown', (req, res) => {
 });
 
 // Serve report Prometheus metrics
-app.get('/api/reports/:name/prometheus', (req, res) => {
+app.get('/api/reports/:name/prometheus', async (req, res) => {
   const safeName = sanitizeName(req.params.name);
   const reportPath = path.join(REPORTS_DIR, `${safeName}.json`);
   if (!fs.existsSync(reportPath)) {
@@ -589,8 +605,9 @@ app.get('/api/reports/:name/prometheus', (req, res) => {
   try {
     const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
     if (!report.summary) return res.status(400).send('# No summary in report');
-    if (!sll) return res.status(503).send('# Engine helper initializing');
-    const prom = sll.generatePrometheusMetrics(report.summary, report.results || []);
+    const engine = await getSll();
+    if (!engine) return res.status(503).send('# Engine helper initializing');
+    const prom = engine.generatePrometheusMetrics(report.summary, report.results || []);
     res.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
     res.send(prom);
   } catch (err) {
@@ -599,7 +616,7 @@ app.get('/api/reports/:name/prometheus', (req, res) => {
 });
 
 // Serve report status badge SVG
-app.get('/api/reports/:name/badge', (req, res) => {
+app.get('/api/reports/:name/badge', async (req, res) => {
   const safeName = sanitizeName(req.params.name);
   const reportPath = path.join(REPORTS_DIR, `${safeName}.json`);
   if (!fs.existsSync(reportPath)) {
@@ -608,8 +625,9 @@ app.get('/api/reports/:name/badge', (req, res) => {
   try {
     const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
     if (!report.summary) return res.status(400).send('<svg><text>no summary</text></svg>');
-    if (!sll) return res.status(503).send('<svg><text>loading</text></svg>');
-    const svg = sll.generateSvgBadge(report.summary);
+    const engine = await getSll();
+    if (!engine) return res.status(503).send('<svg><text>loading</text></svg>');
+    const svg = engine.generateSvgBadge(report.summary);
     res.setHeader('Content-Type', 'image/svg+xml');
     res.send(svg);
   } catch (err) {
@@ -618,7 +636,7 @@ app.get('/api/reports/:name/badge', (req, res) => {
 });
 
 // SRE Bottleneck Diagnosis for a report
-app.get('/api/reports/:name/diagnosis', (req, res) => {
+app.get('/api/reports/:name/diagnosis', async (req, res) => {
   const safeName = sanitizeName(req.params.name);
   const reportPath = path.join(REPORTS_DIR, `${safeName}.json`);
   if (!fs.existsSync(reportPath)) {
@@ -628,8 +646,9 @@ app.get('/api/reports/:name/diagnosis', (req, res) => {
     const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
     const summary = report.summary || report;
     const results = report.results || [];
-    if (!sll) return res.status(503).json({ error: 'Engine helper initializing' });
-    const diagnosis = summary.diagnosis || sll.computeBottleneckDiagnosis(summary, results);
+    const engine = await getSll();
+    if (!engine) return res.status(503).json({ error: 'Engine helper initializing' });
+    const diagnosis = summary.diagnosis || engine.computeBottleneckDiagnosis(summary, results);
     res.json(diagnosis);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -637,7 +656,7 @@ app.get('/api/reports/:name/diagnosis', (req, res) => {
 });
 
 // Compare two test reports
-app.post('/api/reports/compare', (req, res) => {
+app.post('/api/reports/compare', async (req, res) => {
   const { reportA, reportB } = req.body;
   if (!reportA || !reportB) return res.status(400).json({ error: 'Both reportA and reportB required' });
 
@@ -659,8 +678,9 @@ app.post('/api/reports/compare', (req, res) => {
       return res.status(400).json({ error: 'Reports must contain valid test summaries' });
     }
 
-    if (!sll) return res.status(503).json({ error: 'Engine helper initializing' });
-    const diff = sll.computeAbDiff(summaryA, summaryB);
+    const engine = await getSll();
+    if (!engine) return res.status(503).json({ error: 'Engine helper initializing' });
+    const diff = engine.computeAbDiff(summaryA, summaryB);
     res.json({ diff, summaryA, summaryB });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -668,12 +688,13 @@ app.post('/api/reports/compare', (req, res) => {
 });
 
 // Convert Postman Collection
-app.post('/api/import/postman', (req, res) => {
+app.post('/api/import/postman', async (req, res) => {
   const { content, duration, concurrency, rps } = req.body;
   if (!content) return res.status(400).json({ error: 'Postman collection JSON required' });
   try {
-    if (!sll) return res.status(503).json({ error: 'Engine helper initializing' });
-    const config = sll.parsePostmanCollection(content, { duration, concurrency, rps });
+    const engine = await getSll();
+    if (!engine) return res.status(503).json({ error: 'Engine helper initializing' });
+    const config = engine.parsePostmanCollection(content, { duration, concurrency, rps });
     res.json(config);
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -681,12 +702,13 @@ app.post('/api/import/postman', (req, res) => {
 });
 
 // Convert OpenAPI / Swagger Spec
-app.post('/api/import/openapi', (req, res) => {
+app.post('/api/import/openapi', async (req, res) => {
   const { content, duration, concurrency, rps, baseUrl } = req.body;
   if (!content) return res.status(400).json({ error: 'OpenAPI specification JSON required' });
   try {
-    if (!sll) return res.status(503).json({ error: 'Engine helper initializing' });
-    const config = sll.parseOpenApiSpec(content, { duration, concurrency, rps, baseUrl });
+    const engine = await getSll();
+    if (!engine) return res.status(503).json({ error: 'Engine helper initializing' });
+    const config = engine.parseOpenApiSpec(content, { duration, concurrency, rps, baseUrl });
     res.json(config);
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -694,12 +716,13 @@ app.post('/api/import/openapi', (req, res) => {
 });
 
 // Synthesize CRUD Journey Flow from OpenAPI / Swagger Spec
-app.post('/api/import/openapi-flow', (req, res) => {
+app.post('/api/import/openapi-flow', async (req, res) => {
   const { content, duration, concurrency, rps, baseUrl } = req.body;
   if (!content) return res.status(400).json({ error: 'OpenAPI specification JSON required' });
   try {
-    if (!sll) return res.status(503).json({ error: 'Engine helper initializing' });
-    const config = sll.generateCrudScenarioFromOpenApi(content, { duration, concurrency, rps, baseUrl });
+    const engine = await getSll();
+    if (!engine) return res.status(503).json({ error: 'Engine helper initializing' });
+    const config = engine.generateCrudScenarioFromOpenApi(content, { duration, concurrency, rps, baseUrl });
     res.json(config);
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -707,12 +730,13 @@ app.post('/api/import/openapi-flow', (req, res) => {
 });
 
 // Convert HAR recording
-app.post('/api/import/har', (req, res) => {
+app.post('/api/import/har', async (req, res) => {
   const { content, duration, concurrency, rps, includeAssets, host } = req.body;
   if (!content) return res.status(400).json({ error: 'HAR recording JSON required' });
   try {
-    if (!sll) return res.status(503).json({ error: 'Engine helper initializing' });
-    const config = sll.parseHarRecording(content, { duration, concurrency, rps, includeAssets, host });
+    const engine = await getSll();
+    if (!engine) return res.status(503).json({ error: 'Engine helper initializing' });
+    const config = engine.parseHarRecording(content, { duration, concurrency, rps, includeAssets, host });
     res.json(config);
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -724,7 +748,8 @@ app.post('/api/probe', async (req, res) => {
   const { url, method, headers, body, assertions, timeout, variables } = req.body;
   if (!url) return res.status(400).json({ error: 'Target URL is required for probe' });
   try {
-    if (!sll) return res.status(503).json({ error: 'Engine helper initializing' });
+    const engine = await getSll();
+    if (!engine) return res.status(503).json({ error: 'Engine helper initializing' });
     const ep = {
       name: 'probe-request',
       url,
@@ -734,7 +759,7 @@ app.post('/api/probe', async (req, res) => {
       assertions: assertions || [],
       variables: variables || {}
     };
-    const result = await sll.probeEndpoint(ep, timeout ? parseInt(timeout, 10) : 10000);
+    const result = await engine.probeEndpoint(ep, timeout ? parseInt(timeout, 10) : 10000);
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -742,11 +767,12 @@ app.post('/api/probe', async (req, res) => {
 });
 
 // Generate CI/CD pipeline workflow
-app.post('/api/ci/generate', (req, res) => {
+app.post('/api/ci/generate', async (req, res) => {
   const { type, config, cron } = req.body;
   try {
-    if (!sll) return res.status(503).json({ error: 'Engine helper initializing' });
-    const yaml = sll.generateCiWorkflow(type || 'github', { config: config || 'load-test.json', cron });
+    const engine = await getSll();
+    if (!engine) return res.status(503).json({ error: 'Engine helper initializing' });
+    const yaml = engine.generateCiWorkflow(type || 'github', { config: config || 'load-test.json', cron });
     res.json({ type: type || 'github', yaml });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -754,12 +780,13 @@ app.post('/api/ci/generate', (req, res) => {
 });
 
 // Parse CSV text for dataset preview
-app.post('/api/parse-csv', (req, res) => {
+app.post('/api/parse-csv', async (req, res) => {
   const { content } = req.body;
   if (!content) return res.status(400).json({ error: 'CSV content required' });
   try {
-    if (!sll) return res.status(503).json({ error: 'Engine helper initializing' });
-    const rows = sll.parseCsvData(content);
+    const engine = await getSll();
+    if (!engine) return res.status(503).json({ error: 'Engine helper initializing' });
+    const rows = engine.parseCsvData(content);
     res.json({ count: rows.length, rows: rows.slice(0, 50), headers: rows.length ? Object.keys(rows[0]) : [] });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -767,12 +794,13 @@ app.post('/api/parse-csv', (req, res) => {
 });
 
 // Export configuration to k6 script
-app.post('/api/export/k6', (req, res) => {
+app.post('/api/export/k6', async (req, res) => {
   const { config } = req.body;
   if (!config) return res.status(400).json({ error: 'Config object required' });
   try {
-    if (!sll) return res.status(503).json({ error: 'Engine helper initializing' });
-    const script = sll.exportToK6(config);
+    const engine = await getSll();
+    if (!engine) return res.status(503).json({ error: 'Engine helper initializing' });
+    const script = engine.exportToK6(config);
     res.json({ script });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -780,12 +808,13 @@ app.post('/api/export/k6', (req, res) => {
 });
 
 // Export configuration to Postman Collection
-app.post('/api/export/postman', (req, res) => {
+app.post('/api/export/postman', async (req, res) => {
   const { config } = req.body;
   if (!config) return res.status(400).json({ error: 'Config object required' });
   try {
-    if (!sll) return res.status(503).json({ error: 'Engine helper initializing' });
-    const collectionJson = sll.exportToPostman(config);
+    const engine = await getSll();
+    if (!engine) return res.status(503).json({ error: 'Engine helper initializing' });
+    const collectionJson = engine.exportToPostman(config);
     res.json({ collection: JSON.parse(collectionJson) });
   } catch (err) {
     res.status(400).json({ error: err.message });

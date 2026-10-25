@@ -256,9 +256,41 @@ test('UI Server API Suite', async (t) => {
       body: JSON.stringify({ content: spec, duration: 20 })
     });
     assert.equal(status, 200);
-    assert.ok(data.scenarios.length >= 1);
     assert.equal(data.scenarios[0].steps[0].method, 'POST');
     assert.ok(data.scenarios[0].steps[0].extract.itemId);
+  });
+
+  await t.test('GET /api/configs/:name rejects non-json files and path traversal', async () => {
+    const res1 = await fetch(`http://127.0.0.1:${port}/api/configs/non-existent.txt`);
+    assert.equal(res1.status, 400);
+    const data1 = await res1.json();
+    assert.ok(data1.error);
+
+    const res2 = await fetch(`http://127.0.0.1:${port}/api/configs/..%2f..%2fpackage.json`);
+    assert.ok(res2.status === 400 || res2.status === 404);
+  });
+
+  await t.test('Hermetic mock server rejects payloads exceeding 2MB with HTTP 413', async () => {
+    // Start mock server
+    const startRes = await requestJson('/api/mock/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ port: 8099 })
+    });
+    assert.equal(startRes.status, 200);
+
+    try {
+      // Create a payload larger than 2MB
+      const bigPayload = 'A'.repeat(2 * 1024 * 1024 + 1024);
+      const res = await fetch('http://127.0.0.1:8099/echo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: bigPayload
+      });
+      assert.equal(res.status, 413, 'Must return HTTP 413 Payload Too Large');
+    } finally {
+      await requestJson('/api/mock/stop', { method: 'POST' });
+    }
   });
 });
 
