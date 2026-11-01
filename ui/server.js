@@ -460,11 +460,29 @@ app.post('/api/mock/start', async (req, res) => {
   const engine = await getSll();
   if (engine && engine.startMockServer) {
     try {
-      mockServerInstance = engine.startMockServer(mockPort, '127.0.0.1');
-      mockServerInstance.on('error', () => {
+      const srv = engine.startMockServer(mockPort, '127.0.0.1');
+      let responded = false;
+      srv.once('error', (err) => {
+        if (!responded) {
+          responded = true;
+          mockServerInstance = null;
+          return res.status(500).json({ error: `Mock server failed to bind port ${mockPort}: ${err.message}` });
+        }
         mockServerInstance = null;
       });
-      return res.json({ running: true, port: mockPort, message: `Mock server started on port ${mockPort}` });
+      const onReady = () => {
+        if (!responded) {
+          responded = true;
+          mockServerInstance = srv;
+          return res.json({ running: true, port: mockPort, message: `Mock server started on port ${mockPort}` });
+        }
+      };
+      if (srv.listening) {
+        onReady();
+      } else {
+        srv.once('listening', onReady);
+      }
+      return;
     } catch (e) {
       return res.status(500).json({ error: e.message });
     }

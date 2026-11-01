@@ -300,16 +300,31 @@ Notes:
 
 function parseArgs(argv) {
   const args = { _: [] };
+  const shortMap = {
+    '-c': 'config',
+    '-u': 'url',
+    '-d': 'duration',
+    '-m': 'method',
+    '-H': 'header',
+    '-o': 'out',
+    '-p': 'port',
+    '-h': 'help',
+    '-v': 'verbose'
+  };
+
   for (let i = 0; i < argv.length; i++) {
-    const item = argv[i];
+    let item = argv[i];
+    if (shortMap[item]) {
+      item = `--${shortMap[item]}`;
+    }
     if (!item.startsWith('--')) { args._.push(item); continue; }
     const key = item.slice(2);
-    if (['i-own-this-target', 'include-assets', 'realistic', 'verbose', 'debug', 'unlock-limits', 'high-capacity'].includes(key)) {
+    if (['i-own-this-target', 'include-assets', 'realistic', 'verbose', 'debug', 'unlock-limits', 'high-capacity', 'help', 'version'].includes(key)) {
       args[key] = true;
       continue;
     }
     const value = argv[i + 1];
-    if (value === undefined || value.startsWith('--')) { args[key] = true; continue; }
+    if (value === undefined || value.startsWith('--') || shortMap[value]) { args[key] = true; continue; }
     i++;
     if (key === 'header') { args.header = args.header || []; args.header.push(value); }
     else args[key] = value;
@@ -344,7 +359,8 @@ function parseHeaders(headerList = []) {
 
 function getByPath(obj, dottedPath) {
   if (!dottedPath) return undefined;
-  return String(dottedPath).split('.').reduce((acc, key) => acc == null ? undefined : acc[key], obj);
+  const normalized = String(dottedPath).replace(/\[(\w+)\]/g, '.$1').replace(/^\./, '');
+  return normalized.split('.').reduce((acc, key) => acc == null ? undefined : acc[key], obj);
 }
 
 function setByPath(obj, dottedPath, value) {
@@ -974,45 +990,63 @@ function parseCurlCommand(curlStr) {
   
   const clean = curlStr.trim().replace(/^curl\s+/i, '');
   
-  // Extract URL (quoted or unquoted)
-  const urlMatch = clean.match(/(?:^|\s)(?:'([^']+)'|"([^"]+)"|(https?:\/\/[^\s]+))/);
-  const rawUrl = urlMatch ? (urlMatch[1] || urlMatch[2] || urlMatch[3]) : null;
-  if (!rawUrl || !rawUrl.startsWith('http')) {
-    const fallbackMatch = clean.match(/https?:\/\/[^\s"']+/);
-    if (!fallbackMatch) throw new Error('No HTTP/HTTPS URL found in curl command');
-  }
-  const url = rawUrl && rawUrl.startsWith('http') ? rawUrl : clean.match(/https?:\/\/[^\s"']+/)[0];
-
-  // Extract Method
-  let method = 'GET';
-  const methodMatch = clean.match(/(?:-X|--request)\s+([A-Za-z]+)/i);
-  if (methodMatch) {
-    method = methodMatch[1].toUpperCase();
+  // Tokenize arguments respecting quotes
+  const tokens = [];
+  const tokenRegex = /[^\s"']+|"([^"\\]*(?:\\.[^"\\]*)*)"|'([^'\\]*(?:\\.[^'\\]*)*)'/g;
+  let match;
+  while ((match = tokenRegex.exec(clean)) !== null) {
+    if (match[1] !== undefined) tokens.push(match[1].replace(/\\"/g, '"'));
+    else if (match[2] !== undefined) tokens.push(match[2].replace(/\\'/g, "'"));
+    else tokens.push(match[0]);
   }
 
-  // Extract Headers
+  let method = null;
   const headers = {};
-  const headerRegex = /(?:-H|--header)\s+(?:'([^']+)'|"([^"]+)")/g;
-  let hMatch;
-  while ((hMatch = headerRegex.exec(clean)) !== null) {
-    const raw = hMatch[1] || hMatch[2];
-    const colonIdx = raw.indexOf(':');
-    if (colonIdx !== -1) {
-      const k = raw.slice(0, colonIdx).trim();
-      const v = raw.slice(colonIdx + 1).trim();
-      headers[k] = v;
+  let body = null;
+  let url = null;
+
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t === '-X' || t === '--request') {
+      method = (tokens[++i] || 'GET').toUpperCase();
+    } else if (t === '-H' || t === '--header') {
+      const raw = tokens[++i] || '';
+      const colonIdx = raw.indexOf(':');
+      if (colonIdx !== -1) {
+        headers[raw.slice(0, colonIdx).trim()] = raw.slice(colonIdx + 1).trim();
+      }
+    } else if (t === '-d' || t === '--data' || t === '--data-raw' || t === '--data-binary') {
+      body = tokens[++i] ?? '';
+    } else if (t === '--url') {
+      url = tokens[++i];
+    } else if (t === '-A' || t === '--user-agent') {
+      headers['User-Agent'] = tokens[++i] || '';
+    } else if (t === '-b' || t === '--cookie') {
+      headers['Cookie'] = tokens[++i] || '';
+    } else if (t === '-u' || t === '--user') {
+      const creds = tokens[++i] || '';
+      headers['Authorization'] = `Basic ${Buffer.from(creds).toString('base64')}`;
+    } else if (t.startsWith('-')) {
+      continue;
+    } else if (!url && (t.startsWith('http://') || t.startsWith('https://'))) {
+      url = t;
     }
   }
 
-  // Extract Body
-  let body = null;
-  const dataMatch = clean.match(/(?:-d|--data|--data-raw|--data-binary)\s+(?:'([^']*)'|"([^"]*)")/s) ||
-                    clean.match(/(?:-d|--data|--data-raw|--data-binary)\s+([^\s]+)/);
-  if (dataMatch) {
-    body = dataMatch[1] !== undefined ? dataMatch[1] : (dataMatch[2] !== undefined ? dataMatch[2] : dataMatch[3]);
-    if (!methodMatch) method = 'POST';
+  if (!url) {
+    // Fallback search in full clean string
+    const fallbackMatch = clean.match(/https?:\/\/[^\s"']+/);
+    if (!fallbackMatch) throw new Error('No HTTP/HTTPS URL found in curl command');
+    url = fallbackMatch[0];
+  }
+
+  if (!method) {
+    method = body !== null ? 'POST' : 'GET';
+  }
+
+  if (body) {
     const hasContentType = Object.keys(headers).some(k => k.toLowerCase() === 'content-type');
-    if (!hasContentType && body) {
+    if (!hasContentType) {
       try {
         JSON.parse(body);
         headers['Content-Type'] = 'application/json';
@@ -1022,7 +1056,11 @@ function parseCurlCommand(curlStr) {
     }
   }
 
-  const pathname = new URL(url).pathname;
+  let pathname = '/';
+  try {
+    pathname = new URL(url).pathname;
+  } catch {}
+
   return {
     name: `curl-${method.toLowerCase()}${pathname === '/' ? '' : pathname.replace(/\//g, '-')}`,
     url,
@@ -1434,17 +1472,23 @@ function exportToPostman(config) {
     const u = new URL(ep.url);
     const pathParts = u.pathname.split('/').filter(Boolean);
 
+    const reqUrl = {
+      raw: ep.url,
+      protocol: u.protocol.replace(':', ''),
+      host: u.hostname.split('.'),
+      path: pathParts
+    };
+    if (u.port) reqUrl.port = u.port;
+    if (u.search) {
+      reqUrl.query = Array.from(u.searchParams.entries()).map(([key, value]) => ({ key, value }));
+    }
+
     const reqItem = {
       name: ep.name,
       request: {
         method: ep.method,
         header: headers,
-        url: {
-          raw: ep.url,
-          protocol: u.protocol.replace(':', ''),
-          host: u.host.split('.'),
-          path: pathParts
-        }
+        url: reqUrl
       }
     };
 
@@ -1535,6 +1579,14 @@ function startMockServer(port = 8080, host = '127.0.0.1') {
       history = history.filter(ts => now - ts < windowMs);
       history.push(now);
       requestHistory.set(clientIp, history);
+
+      if (requestHistory.size > 500) {
+        for (const [ip, tsList] of requestHistory.entries()) {
+          const fresh = tsList.filter(ts => now - ts < windowMs);
+          if (!fresh.length) requestHistory.delete(ip);
+          else requestHistory.set(ip, fresh);
+        }
+      }
 
       if (history.length > limit) {
         res.writeHead(429, {
@@ -2086,10 +2138,14 @@ async function doRequest(ep, timeoutMs, captureBody = false) {
       bytesReceived += key.length + value.length + 4;
     });
     
-    // Only consume body when needed - for non-success responses, skip body reading if not capturing
-    const text = captureBody ? await res.text().catch(() => '') : 
-                 (res.status >= 200 && res.status < 300) ? await res.arrayBuffer().then(buf => { if (!cl) bytesReceived += buf.byteLength; return ''; }).catch(() => '') :
-                 '';
+    // Only consume body when needed - for non-success responses or when capturing assertions/variables
+    const needsBody = Boolean(
+      captureBody ||
+      ep.extract ||
+      (ep.assertions && ep.assertions.some(a => ['body', 'bodyRegex', 'regex', 'jsonPath', 'jsonSchema', 'schema'].includes(a.type)))
+    );
+    const text = needsBody ? await res.text().catch(() => '') : 
+                 await res.arrayBuffer().then(buf => { if (!cl) bytesReceived += buf.byteLength; return ''; }).catch(() => '');
     if (!cl && text) bytesReceived += Buffer.byteLength(text);
     
     const durationMs = performance.now() - start;
@@ -2619,7 +2675,10 @@ async function runTest(config) {
               }
             }
 
-            if (res.error || (step.expectStatus && res.status !== step.expectStatus)) {
+            const statusMatches = Array.isArray(step.expectStatus)
+              ? step.expectStatus.includes(res.status)
+              : res.status === step.expectStatus;
+            if (res.error || (step.expectStatus && !statusMatches)) {
               if (step.continueOnFailure !== true) break;
             }
           }
@@ -3427,7 +3486,7 @@ function compareReports(file1Path, file2Path, options = {}) {
   compare('p95 Latency', s1.latencyMs?.p95, s2.latencyMs?.p95, 'ms', true);
   compare('p99 Latency', s1.latencyMs?.p99, s2.latencyMs?.p99, 'ms', true);
 
-  const p95DiffPct = s1.latencyMs?.p95 ? Number((((s2.latencyMs.p95 - s1.latencyMs.p95) / s1.latencyMs.p95) * 100).toFixed(2)) : 0;
+  const p95DiffPct = s1.latencyMs?.p95 ? Number(((((s2.latencyMs?.p95 ?? 0) - s1.latencyMs.p95) / s1.latencyMs.p95) * 100).toFixed(2)) : 0;
   const errorRateDiff = Number((((s2.totals?.errorRate || 0) - (s1.totals?.errorRate || 0)) * 100).toFixed(2));
 
   let isRegression = false;
@@ -3653,8 +3712,8 @@ function computeAbDiff(summaryA, summaryB, options = {}) {
   return {
     variantA: summaryA.testName || 'Variant A',
     variantB: summaryB.testName || 'Variant B',
-    requests: { a: summaryA.totals.requests, b: summaryB.totals.requests, diff: reqDelta },
-    rps: { a: summaryA.totals.achievedRps, b: summaryB.totals.achievedRps, diff: rpsDelta },
+    requests: { a: summaryA.totals?.requests || 0, b: summaryB.totals?.requests || 0, diff: reqDelta },
+    rps: { a: summaryA.totals?.achievedRps || 0, b: summaryB.totals?.achievedRps || 0, diff: rpsDelta },
     errorRate: { a: errorRateA, b: errorRateB, diff: errorRateDiff },
     latencies,
     winner,
@@ -4286,6 +4345,10 @@ async function main() {
       console.log(chalk.gray('  Interactive visual workspace for scenario builder, live telemetry, and exports.'));
       console.log(chalk.gray('  Press Ctrl+C to stop.\n'));
     });
+    srv.on('error', err => {
+      console.error(chalk.red(`\n❌ Studio server error: ${err.message}`));
+      process.exit(1);
+    });
     process.on('SIGINT', () => {
       console.log(chalk.yellow('\nStopping Studio server...'));
       srv.close(() => process.exit(0));
@@ -4296,6 +4359,10 @@ async function main() {
     const port = Number(args.port || 8080);
     const host = args.host || '127.0.0.1';
     const server = startMockServer(port, host);
+    server.on('error', err => {
+      console.error(chalk.red(`\n❌ Mock server error: ${err.message}`));
+      process.exit(1);
+    });
     console.log(chalk.bold.green(`✓ Safe Load Lab Mock Server running on http://${host}:${port}`));
     console.log(chalk.gray('  Hermetic test routes ready for zero-flake load testing:'));
     console.log(`  - ${chalk.cyan('GET')}  http://${host}:${port}/health`);

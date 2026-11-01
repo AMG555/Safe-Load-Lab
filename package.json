@@ -35,8 +35,8 @@
     "test:smoke": "node --test tests/smoke.test.mjs",
     "test:ui": "node --test tests/ui.test.mjs",
     "test:all": "node --test tests/*.test.mjs",
-    "lint": "eslint . --ext .js",
-    "lint:fix": "eslint . --ext .js --fix"
+    "lint": "node --check bin/safe-load-lab.js ui/server.js",
+    "lint:fix": "node --check bin/safe-load-lab.js ui/server.js"
   },
   "keywords": [
     "load-testing",

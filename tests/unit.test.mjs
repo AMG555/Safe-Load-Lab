@@ -10,7 +10,11 @@ import {
   parseCsvData,
   resolveDynamicGenerator,
   renderTemplate,
-  pickEndpoint
+  pickEndpoint,
+  parseCurlCommand,
+  parseArgs,
+  computeAbDiff,
+  exportToPostman
 } from '../bin/safe-load-lab.js';
 
 
@@ -232,4 +236,57 @@ test('resolveDynamicGenerator - boundary checks and length limits', () => {
 
   const invertedInt = parseInt(resolveDynamicGenerator('$randomInt:100:50'), 10);
   assert.ok(invertedInt >= 50 && invertedInt <= 100, 'Inverted min/max must swap correctly');
+});
+
+test('getByPath - bracket notation and array indexing', () => {
+  const data = {
+    users: [
+      { id: 1, name: 'Alice' },
+      { id: 2, name: 'Bob' }
+    ]
+  };
+  assert.equal(getByPath(data, 'users[0].name'), 'Alice');
+  assert.equal(getByPath(data, 'users[1].id'), 2);
+  assert.equal(getByPath(data.users, '[0].name'), 'Alice');
+});
+
+test('parseCurlCommand - correctly isolates target URL when headers contain URLs', () => {
+  const cmd = 'curl -X POST -H "Referer: https://evil.example.com" -H "Content-Type: application/json" -d \'{"target":"https://internal.net"}\' http://my-service.local:9000/api/v1';
+  const ep = parseCurlCommand(cmd);
+  assert.equal(ep.url, 'http://my-service.local:9000/api/v1');
+  assert.equal(ep.method, 'POST');
+  assert.equal(ep.headers.Referer, 'https://evil.example.com');
+  assert.equal(ep.headers['Content-Type'], 'application/json');
+  assert.equal(ep.body, '{"target":"https://internal.net"}');
+});
+
+test('parseArgs - supports short flags and safety overrides', () => {
+  const args = parseArgs(['-c', 'config.json', '-u', 'http://127.0.0.1:8080', '-d', '15', '-v', '--i-own-this-target']);
+  assert.equal(args.config, 'config.json');
+  assert.equal(args.url, 'http://127.0.0.1:8080');
+  assert.equal(args.duration, '15');
+  assert.equal(args.verbose, true);
+  assert.equal(args['i-own-this-target'], true);
+});
+
+test('computeAbDiff - handles missing summary properties without throwing', () => {
+  const summaryA = { testName: 'A' };
+  const summaryB = { testName: 'B' };
+  const diff = computeAbDiff(summaryA, summaryB);
+  assert.equal(diff.requests.a, 0);
+  assert.equal(diff.requests.b, 0);
+  assert.equal(diff.winner, 'similar');
+});
+
+test('exportToPostman - properly formats host and port in URL object', () => {
+  const config = {
+    name: 'test-suite',
+    endpoints: [{ name: 'ep1', url: 'http://localhost:8080/users?page=1', method: 'GET' }]
+  };
+  const jsonStr = exportToPostman(config);
+  const parsed = JSON.parse(jsonStr);
+  const itemUrl = parsed.item[0].request.url;
+  assert.deepEqual(itemUrl.host, ['localhost']);
+  assert.equal(itemUrl.port, '8080');
+  assert.deepEqual(itemUrl.query, [{ key: 'page', value: '1' }]);
 });

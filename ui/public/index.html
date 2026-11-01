@@ -2410,6 +2410,7 @@
     }
 
     function renderLatencyChart(data) {
+      if (typeof Chart === 'undefined') return;
       document.getElementById('chartSection').style.display = 'block';
       const ctx = document.getElementById('latencyChart').getContext('2d');
       if (latencyChartInstance) latencyChartInstance.destroy();
@@ -2606,6 +2607,7 @@
     }
 
     function renderAbChart(latencies) {
+      if (typeof Chart === 'undefined') return;
       document.getElementById('abChartSection').style.display = 'block';
       const ctx = document.getElementById('abChart').getContext('2d');
       if (abChartInstance) abChartInstance.destroy();
@@ -2779,7 +2781,7 @@
           container.innerHTML = configs.map(c => {
             const safeFile = escapeHtml(c.filename);
             const safeName = escapeHtml(c.name || c.filename);
-            const encFile = encodeURIComponent(c.filename);
+            const encFile = encodeURIComponent(c.filename).replace(/'/g, '%27');
             return `
             <div class="preset-card" onclick="applyPresetToWorkbench('${encFile}')">
               <div class="preset-title">
@@ -2965,7 +2967,7 @@
         const kb = Math.round((Number(r.sizeBytes) || 0) / 1024);
         const typeBadge = r.isAb ? '<span class="badge badge-warning">A/B Benchmark</span>' : '<span class="badge badge-success">Load Test</span>';
         const safeName = escapeHtml(r.name);
-        const encName = encodeURIComponent(r.name);
+        const encName = encodeURIComponent(r.name).replace(/'/g, '%27');
         
         let statsSnippet = '';
         if (r.preview?.type === 'load' && r.preview.requests) {
